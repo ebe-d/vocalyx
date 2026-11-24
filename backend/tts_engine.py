@@ -503,7 +503,7 @@ def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
     # Clean text: remove markdown symbols, brackets, URLs
     clean_text = re.sub(r'[*_#`~\[\]()]', ' ', text)
     clean_text = re.sub(r'https?://\S+', '', clean_text)
-    clean_text = clean_text.replace('!', '.').replace('—', ', ').strip()
+    clean_text = clean_text.replace('!', '.').replace('—', ', ').replace('–', ', ').strip()
     if not clean_text:
         clean_text = text.strip() or "Hello"
 

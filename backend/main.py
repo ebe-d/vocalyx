@@ -1757,6 +1757,7 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
         call_state["silence_count"] = 0
         print(f"[Twilio Caller Speech] Call {call_sid}: '{speech_result}'")
 
+        contact = None
         contact_memory = {}
         previous_calls_data = []
         if contact_id:
@@ -1784,15 +1785,9 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
 
         # Record user speech
         call_state.setdefault("transcript", []).append({"role": "user", "text": speech_result})
+        transcript_snapshot = list(call_state.get("transcript", []))
 
-        # Query RAG + LLM with graceful fallbacks
-        try:
-            rag_context = rag_engine.search(speech_result)
-        except Exception as rag_err:
-            print(f"[RAG Note]: {rag_err}")
-            rag_context = ""
-
-        call_lang = call_state.get("language") or getattr(contact, "preferred_language", "en-US") or "en-US"
+        call_lang = call_state.get("language") or (getattr(contact, "preferred_language", "en-US") if contact else "en-US") or "en-US"
         if call_lang in ("kn-IN", "kn"):
             call_engine = "kannada_male" if ("male" in (call_engine or "").lower() and "female" not in (call_engine or "").lower()) else "kannada_female"
             call_state["voice_engine"] = call_engine
@@ -1803,16 +1798,28 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
         call_ref_audio = call_state.get("reference_audio")
         call_persona = call_state.get("persona_name") or _get_voice_persona_name(None, call_engine)
 
-        try:
-            agent_reply = llm_engine.get_chat_response(
+        import asyncio
+        t_req_start = time.monotonic()
+        loop = asyncio.get_event_loop()
+
+        def _rag_and_llm():
+            try:
+                rag_ctx = rag_engine.search(speech_result)
+            except Exception as rag_err:
+                print(f"[RAG Note]: {rag_err}")
+                rag_ctx = ""
+            return llm_engine.get_chat_response(
                 user_message=speech_result,
-                rag_context=rag_context,
+                rag_context=rag_ctx,
                 contact_memory=contact_memory,
-                conversation_history=call_state.get("transcript", []),
+                conversation_history=transcript_snapshot,
                 previous_calls=previous_calls_data,
                 language=call_lang,
                 agent_name=call_persona,
             )
+
+        try:
+            agent_reply = await asyncio.wait_for(loop.run_in_executor(None, _rag_and_llm), timeout=6.5)
         except Exception as llm_err:
             print(f"[LLM Note]: {llm_err}")
             agent_reply = "I understand. Let me check that and get right back to you on that."
@@ -1821,43 +1828,63 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
 
         # Record agent response
         call_state["transcript"].append({"role": "agent", "text": agent_reply})
+        turn_id = str(len(call_state["transcript"]))
+        synth_key = f"{call_sid}:{turn_id}"
 
-        import asyncio
         wav_path = None
-        loop = asyncio.get_event_loop()
-        if call_engine not in ["polly", "twilio_say", "say"]:
+        is_cloned_engine = not any(k in (call_engine or "").lower() for k in ["polly", "say", "native"])
+        if is_cloned_engine:
+            tts_mod = sys.modules.get("backend.tts_engine")
+            if tts_mod is None or not hasattr(tts_mod, "synthesize"):
+                from backend import tts_engine as tts_mod
+
+            def _run_tts():
+                out = tts_mod.synthesize(agent_reply, reference_audio=call_ref_audio, engine=call_engine)
+                if out and os.path.exists(out):
+                    twilio_service.pregenerated_audio[synth_key] = out
+                return out
+
+            synth_future = loop.run_in_executor(None, _run_tts)
+            call_state.setdefault("pending_futures", {})[turn_id] = synth_future
+            wait_budget = max(1.5, 7.0 - (time.monotonic() - t_req_start))
             try:
-                tts_mod = sys.modules.get("backend.tts_engine")
-                if tts_mod is None or not hasattr(tts_mod, "synthesize"):
-                    from backend import tts_engine as tts_mod
-                wav_path = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: tts_mod.synthesize(agent_reply, reference_audio=call_ref_audio, engine=call_engine)),
-                    timeout=15.0
-                )
+                wav_path = await asyncio.wait_for(asyncio.shield(synth_future), timeout=wait_budget)
+                twilio_service.pregenerated_audio.pop(synth_key, None)
             except asyncio.TimeoutError:
-                print(f"[Twilio Webhook] Synthesis timeout ({call_engine}) for call {call_sid}")
-                wav_path = None
+                from twilio.twiml.voice_response import VoiceResponse
+                public_url = twilio_service.resolve_base_url(base_url)
+                cont_url = f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop=1"
+                vr = VoiceResponse()
+                vr.pause(length=2)
+                vr.redirect(cont_url, method="POST")
+                print(f"[Twilio Webhook] Fast handoff to /api/twilio/continue after {time.monotonic() - t_req_start:.2f}s (turn={turn_id})")
+                return Response(content=str(vr), media_type="application/xml")
             except Exception as synth_err:
                 print(f"[Twilio Webhook] Synthesis note ({call_engine}): {synth_err}")
                 wav_path = None
 
-        # Build TwiML directly with the synthesized cloned audio or Polly speech:
+        # Build TwiML directly with the synthesized audio or Polly speech
         twiml_xml = twilio_service.build_twiml(agent_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False, voice_engine=call_engine, reference_audio=call_ref_audio)
-        return Response(content=twiml_xml, media_type="application/xml")
         return Response(content=twiml_xml, media_type="application/xml")
     except Exception as exc:
         print(f"[Twilio Respond Webhook Critical Error Handled]: {exc}")
-        safe_xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{base_url}/tts_output/prewarmed_reprompt.wav</Play><Gather action="{base_url}/api/twilio/respond?call_sid={call_sid}" input="speech" method="POST" speechTimeout="auto" timeout="8"/><Redirect method="POST">{base_url}/api/twilio/respond?call_sid={call_sid}&amp;silence=2</Redirect></Response>'
-        return Response(content=safe_xml, media_type="application/xml")
+        from twilio.twiml.voice_response import VoiceResponse, Gather
+        public_url = twilio_service.resolve_base_url(base_url)
+        vr = VoiceResponse()
+        vr.play(f"{public_url}/tts_output/prewarmed_reprompt.wav")
+        vr.append(Gather(input="speech", action=f"{public_url}/api/twilio/respond?call_sid={call_sid}", method="POST", speech_timeout="auto", timeout=8))
+        vr.redirect(f"{public_url}/api/twilio/respond?call_sid={call_sid}&silence=2", method="POST")
+        return Response(content=str(vr), media_type="application/xml")
 
 
 @app.api_route("/api/twilio/continue", methods=["GET", "POST"])
 async def twilio_continue_webhook(request: Request):
     """
-    Called by Twilio <Redirect> after playing the cloned filler audio.
-    Delivers the synthesized cloned answer and gathers next caller speech.
+    Called by Twilio <Redirect> when TTS synthesis extends past the initial webhook budget.
+    Waits cleanly within Twilio's HTTP limit, redirects once more if needed, then delivers audio.
     """
-    import os, asyncio
+    import asyncio
+    from twilio.twiml.voice_response import VoiceResponse
     from backend import twilio_service, config
     base_url = get_request_base_url(request)
 
@@ -1868,16 +1895,36 @@ async def twilio_continue_webhook(request: Request):
         except Exception:
             pass
     call_sid = form_data.get("CallSid") or request.query_params.get("call_sid") or request.query_params.get("CallSid") or "call_unknown"
+    turn_id = request.query_params.get("turn") or ""
+    try:
+        hop = int(request.query_params.get("hop", "1") or "1")
+    except ValueError:
+        hop = 1
 
-    # Wait up to 12 seconds for background synthesis if finishing (Twilio timeout is 15s)
+    call_state = twilio_service.active_calls.get(call_sid, {})
+    synth_key = f"{call_sid}:{turn_id}" if turn_id else call_sid
+    pending_future = call_state.get("pending_futures", {}).get(turn_id) if turn_id else None
+
+    # Wait up to 6.5s per hop so each Twilio HTTP request always returns well under Twilio's 15s limit
     wav_path = None
-    for _ in range(60):
-        wav_path = twilio_service.pregenerated_audio.pop(call_sid, None)
+    for _ in range(32):
+        wav_path = twilio_service.pregenerated_audio.pop(synth_key, None)
+        if not wav_path and not turn_id:
+            wav_path = twilio_service.pregenerated_audio.pop(call_sid, None)
         if wav_path and os.path.exists(wav_path):
+            break
+        wav_path = None
+        if pending_future is not None and pending_future.done():
             break
         await asyncio.sleep(0.2)
 
-    call_state = twilio_service.active_calls.get(call_sid, {})
+    if (not wav_path or not os.path.exists(wav_path)) and hop < 2 and pending_future is not None and not pending_future.done():
+        public_url = twilio_service.resolve_base_url(base_url)
+        vr = VoiceResponse()
+        vr.pause(length=1)
+        vr.redirect(f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop={hop + 1}", method="POST")
+        return Response(content=str(vr), media_type="application/xml")
+
     transcript = call_state.get("transcript", [])
     last_reply = "I am listening, please go ahead."
     for msg in reversed(transcript):
@@ -1885,7 +1932,7 @@ async def twilio_continue_webhook(request: Request):
             last_reply = msg.get("text", "")
             break
 
-    # If background synthesis did not complete, use pre-warmed audio so it never hangs or crashes
+    # If background synthesis did not complete or failed, fall back cleanly to prewarmed_reprompt.wav
     if not wav_path or not os.path.exists(wav_path):
         for candidate_name in ["prewarmed_reprompt.wav", "prewarmed_filler.wav"]:
             cand_path = os.path.join(config.TTS_OUTPUT_DIR, candidate_name)
@@ -1893,7 +1940,9 @@ async def twilio_continue_webhook(request: Request):
                 wav_path = cand_path
                 break
 
-    twiml_xml = twilio_service.build_twiml(last_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False)
+    call_engine = call_state.get("voice_engine") or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")
+    call_ref = call_state.get("reference_audio")
+    twiml_xml = twilio_service.build_twiml(last_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False, voice_engine=call_engine, reference_audio=call_ref)
     return Response(content=twiml_xml, media_type="application/xml")
 
 
