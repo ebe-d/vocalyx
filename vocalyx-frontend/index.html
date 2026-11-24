@@ -282,11 +282,11 @@
                 <option value="hindi_male">Madhur &mdash; Hindi Male (Studio Neural)</option>
               </select>
               <div class="field-hint" style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;" id="phone-tts-engine-hint">
-                Alex will speak using F5-TTS cloned voice synthesized into GPU memory.
+                The selected AI voice will speak using its chosen studio/cloned engine.
               </div>
             </div>
 
-            <button class="btn btn-lime btn-lg" id="btn-dial-twilio" style="width:100%; margin-bottom: 16px; justify-content:center;">
+            <button class="btn btn-lime btn-lg" id="btn-dial-twilio" disabled title="Click Re-Warm Voice first before dialing" style="width:100%; margin-bottom: 16px; justify-content:center;">
               <i data-lucide="phone-outgoing"></i> Call Real Phone
             </button>
 
@@ -294,20 +294,20 @@
             <div class="voice-prewarm-box" style="padding:12px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; margin-bottom: 14px;">
               <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
                 <span style="font-size:0.75rem; font-weight:700; display:flex; align-items:center; gap:5px;">
-                  <i data-lucide="zap" style="width:14px; height:14px; color:var(--color-lime, #c5f82a);"></i> Cloned Voice Engine
+                  <i data-lucide="zap" style="width:14px; height:14px; color:var(--color-lime, #c5f82a);"></i> Voice Warmup (Required)
                 </span>
-                <span class="badge badge-grey" id="voice-prewarm-badge" style="font-size:0.7rem;">Checking...</span>
+                <span class="badge badge-yellow" id="voice-prewarm-badge" style="font-size:0.7rem;">Re-Warm Required</span>
               </div>
               <div style="display:flex; flex-wrap:wrap; gap:6px;">
                 <button class="btn btn-dark btn-sm" id="btn-prewarm-voice" style="flex:1 1 130px; min-width:0; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap;">
-                  <i data-lucide="zap"></i> <span id="btn-prewarm-label">Ready Cloned Voice</span>
+                  <i data-lucide="zap"></i> <span id="btn-prewarm-label">Re-Warm Voice (Required)</span>
                 </button>
                 <button class="btn btn-dark btn-sm" id="btn-preview-greeting" style="display:none; flex:0 0 auto; font-size:0.74rem; padding:7px 10px; align-items:center; gap:5px; white-space:nowrap;" title="Play pre-warmed greeting">
                   <i data-lucide="volume-2"></i> Preview
                 </button>
               </div>
               <div id="voice-prewarm-hint" style="font-size:0.7rem; color:var(--text-muted); margin-top:6px; line-height:1.3;">
-                Pre-computes cloned voice weights into GPU memory for 0.00s initial greeting latency.
+                Locks the selected voice, contact &amp; greeting in GPU memory before calling.
               </div>
             </div>
 
@@ -496,7 +496,7 @@
             </div>
 
             <div class="sim-actions">
-              <button class="btn btn-lime btn-lg" id="btn-start-call">
+              <button class="btn btn-lime btn-lg" id="btn-start-call" disabled title="Click Re-Warm Voice first before starting call">
                 <i data-lucide="phone-call"></i> Start Call
               </button>
               <button class="btn btn-dark btn-lg" id="btn-end-call" disabled>
@@ -527,14 +527,14 @@
               </select>
               <div class="sim-prewarm-row" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; align-items:stretch;">
                 <button class="btn btn-dark btn-sm" id="btn-sim-prewarm" style="flex:1 1 130px; min-width:0; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap;">
-                  <i data-lucide="zap"></i> <span id="btn-sim-prewarm-label">Re-Warm Selected Voice</span>
+                  <i data-lucide="zap"></i> <span id="btn-sim-prewarm-label">Re-Warm Voice (Required)</span>
                 </button>
                 <button class="btn btn-outline btn-sm" id="btn-sim-preview-prewarm" style="display:none; flex:0 0 auto; font-size:0.74rem; padding:7px 10px; align-items:center; justify-content:center; gap:5px; white-space:nowrap;" title="Listen to selected voice preview">
                   <i data-lucide="volume-2"></i> Listen
                 </button>
               </div>
               <div id="sim-prewarm-hint" style="font-size:0.7rem; color:var(--text-muted); margin-top:6px; line-height:1.3;">
-                Pre-warms selected voice into GPU memory so conversation starts with 0.0s delay.
+                Required before Start Call — locks selected voice, language &amp; greeting into memory.
               </div>
 
               <!-- Language Selection for Simulator -->

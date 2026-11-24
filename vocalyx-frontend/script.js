@@ -70,12 +70,15 @@ const api = {
   updateAlertsConfig:(d)    => api.post('/api/alerts/config', d),
   testAlert:         (d)    => api.post('/api/alerts/test', d),
   getPrewarmStatus:  ()     => api.get('/api/tts/prewarm-status'),
-  prewarmVoice:   (engine = null, voiceId = null) => {
-    const params = new URLSearchParams();
-    if (engine) params.set('engine', engine);
-    if (voiceId) params.set('voice_id', voiceId);
-    const qs = params.toString();
-    return api._fetch('POST', qs ? `/api/tts/prewarm?${qs}` : '/api/tts/prewarm', {}, false, 120000);
+  prewarmVoice:   (engine = null, voiceId = null, opts = {}) => {
+    const payload = {};
+    if (engine) payload.engine = engine;
+    if (voiceId) payload.voice_id = parseInt(voiceId, 10);
+    if (opts.language) payload.language = opts.language;
+    if (opts.contact_id) payload.contact_id = parseInt(opts.contact_id, 10);
+    if (opts.contact_name) payload.contact_name = opts.contact_name;
+    if (opts.mode) payload.mode = opts.mode;
+    return api._fetch('POST', '/api/tts/prewarm', payload, false, 120000);
   },
   getVoices:      ()     => api.get('/api/voices'),
   computeVoice:   (fd)   => api.postForm('/api/voices/compute', fd, 180000),
@@ -644,9 +647,13 @@ const ui = {
       btn.addEventListener('click', () => {
         ui.showSection('simulator');
         setTimeout(() => {
-          document.getElementById('contact-select').value = btn.dataset.id;
-          // Switch to outbound mode
           document.querySelector('.mode-tab[data-mode="outbound"]')?.click();
+          const sel = document.getElementById('contact-select');
+          if (sel) {
+            sel.value = btn.dataset.id;
+            sel.dispatchEvent(new Event('change'));
+          }
+          simPrewarm.invalidate('Contact selected — click Re-Warm before Start Call.');
         }, 100);
       });
     });
@@ -657,10 +664,14 @@ const ui = {
         ui.showSection('phone-call');
         setTimeout(() => {
           const sel = document.getElementById('phone-contact-select');
-          if (sel) sel.value = btn.dataset.id;
+          if (sel) {
+            sel.value = btn.dataset.id;
+            sel.dispatchEvent(new Event('change'));
+          }
           const phoneInp = document.getElementById('twilio-dial-number');
           if (phoneInp && phone) phoneInp.value = phone;
-          toast.info(`Ready to call ${phone} via Twilio. Click "Call Real Phone" to dial.`);
+          voicePrewarmManager.invalidate('Contact selected — click Re-Warm before calling.');
+          toast.info(`Selected ${phone}. Click "Re-Warm Voice" first, then "Call Real Phone".`);
         }, 150);
       });
     });
@@ -875,6 +886,13 @@ const simulator = {
   },
 
   async startCall() {
+    if (!simPrewarm.isWarmedForCurrent()) {
+      simPrewarm.invalidate();
+      toast.error('Please click "Re-Warm Selected Voice" first before starting a call.');
+      document.getElementById('btn-sim-prewarm')?.focus();
+      return;
+    }
+
     const mode = state.callMode;
     let contact = null;
     let contactId = simulator.getActiveContactId();
@@ -911,7 +929,7 @@ const simulator = {
     document.getElementById('analysis-results').style.display = 'none';
     document.getElementById('analysis-placeholder').style.display = 'flex';
 
-    // Alex will speak initial greeting first; microphone activates after Alex finishes
+    // Persona speaks initial greeting first; microphone activates cleanly afterward
     simulator.setMicState('idle');
     document.getElementById('mic-status').textContent = 'Connecting…';
 
@@ -922,113 +940,37 @@ const simulator = {
       document.getElementById('call-timer').textContent = `${m}:${s}`;
     }, 1000);
 
-    // Initial greeting based on mode + selected voice engine + language
-    let initialGreeting = null;
-    const _greetSimSel = document.getElementById('sim-tts-engine');
-    let _greetEngine = _greetSimSel?.value || 'f5tts';
+    // Use the exact greeting text and audio pre-warmed for this voice + contact + language + mode
+    const simSel = document.getElementById('sim-tts-engine');
+    const ttsEngine = simSel?.value || 'f5tts';
+    const activeVoiceId = simSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
     const simLang = state.selectedLanguage || document.getElementById('sim-language')?.value || 'en-US';
+    const warmed = simPrewarm.warmedData || {};
+    const initialGreeting = warmed.greeting_text || `Hello ${contact.name || 'there'}! This is ${simPrewarm.getPersonaName()} calling from Vocalyx. How are you doing today?`;
+    let audioUrl = warmed.greeting_url || voicePrewarmManager.greetingUrl || '/tts_output/prewarmed_greeting.wav';
 
-    // Auto-adjust voice engine if Kannada or Hindi is selected
-    if (simLang === 'kn-IN') {
-      _greetEngine = _greetEngine.includes('kannada') ? _greetEngine : 'kannada_female';
-      if (_greetSimSel) _greetSimSel.value = _greetEngine;
-    } else if (simLang === 'hi-IN') {
-      _greetEngine = _greetEngine.includes('hindi') ? _greetEngine : 'hindi_female';
-      if (_greetSimSel) _greetSimSel.value = _greetEngine;
-    }
-
-    // For Polly/Joanna/Matthew: use their actual pre-rendered greeting phrase
-    const _isJoanna = _greetEngine === 'polly_joanna' || _greetEngine === 'joanna';
-    const _isMatthew = _greetEngine === 'polly_matthew' || _greetEngine === 'matthew';
-    const _isNativePolly = _greetEngine === 'polly';
-
-    if (simLang === 'kn-IN') {
-      const cName = state.currentContact?.name || contact?.name || 'ಸ್ನೇಹಿತರೆ';
-      if (mode === 'inbound') {
-        initialGreeting = state.currentContact?.id
-          ? `ನಮಸ್ಕಾರ ${cName}! ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ, ನಾನು ಅಲೆಕ್ಸ್. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?`
-          : "ನಮಸ್ಕಾರ, ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ! ನನ್ನ ಹೆಸರು ಅಲೆಕ್ಸ್. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಲ್ಲೆನು?";
-      } else if (mode === 'marketing') {
-        initialGreeting = `ನಮಸ್ಕಾರ ${cName}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ ಅಲೆಕ್ಸ್ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಒಂದು ನಿಮಿಷ ಸಮಯವಿದೆಯೇ?`;
-      } else {
-        initialGreeting = `ನಮಸ್ಕಾರ ${cName}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ ಅಲೆಕ್ಸ್ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಹೇಗಿದ್ದೀರಾ?`;
-      }
-    } else if (simLang === 'hi-IN') {
-      const cName = state.currentContact?.name || contact?.name || 'जी';
-      if (mode === 'inbound') {
-        initialGreeting = state.currentContact?.id
-          ? `नमस्ते ${cName}! वोकलिक्स में आपका स्वागत है, मैं एलेक्स बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?`
-          : "नमस्ते, वोकलिक्स में आपका स्वागत है! मेरा नाम एलेक्स है। मैं आपकी क्या मदद कर सकता हूँ?";
-      } else if (mode === 'marketing') {
-        initialGreeting = `नमस्ते ${cName}! वोकलिक्स से एलेक्स बोल रहा हूँ। क्या आपके पास एक मिनट का समय है?`;
-      } else {
-        initialGreeting = `नमस्ते ${cName}! वोकलिक्स से एलेक्स बोल रहा हूँ। आप कैसे हैं?`;
-      }
-    } else if (mode === 'inbound') {
-      if (_isJoanna) {
-        initialGreeting = state.currentContact?.id
-          ? `Hello ${state.currentContact.name}! Thanks for calling Vocalyx, this is Joanna. How can I help you today?`
-          : "Hello, thank you for calling Vocalyx! My name is Joanna. How may I assist you today?";
-      } else if (_isMatthew || _isNativePolly) {
-        initialGreeting = state.currentContact?.id
-          ? `Hello ${state.currentContact.name}! Thanks for calling Vocalyx, this is Matthew. How can I help you today?`
-          : "Hello there, thank you for calling Vocalyx. This is Matthew speaking. How can I help you today?";
-      } else {
-        initialGreeting = state.currentContact?.id
-          ? `Hello ${state.currentContact.name}! Thanks for calling Vocalyx, this is Alex. How can I help you today?`
-          : "Hello, thank you for calling Vocalyx! My name is Alex. Who do I have the pleasure of speaking with today?";
-      }
-    } else if (mode === 'marketing') {
-      if (_isJoanna) {
-        initialGreeting = `Hi ${contact.name}! This is Joanna calling from Vocalyx. I'm reaching out with an exciting opportunity for you. Do you have a quick minute?`;
-      } else if (_isMatthew || _isNativePolly) {
-        initialGreeting = `Hi ${contact.name}! This is Matthew calling from Vocalyx. I'm reaching out with an exciting opportunity for you. Do you have a quick minute?`;
-      } else {
-        initialGreeting = `Hi ${contact.name}! This is Alex calling from Vocalyx. I'm reaching out with an exciting opportunity for you. Do you have a quick minute?`;
-      }
-    } else if (mode === 'outbound') {
-      if (_isJoanna) {
-        initialGreeting = `Hello ${contact.name}! This is Joanna calling from Vocalyx. How are you doing today?`;
-      } else if (_isMatthew || _isNativePolly) {
-        initialGreeting = `Hello ${contact.name}! This is Matthew calling from Vocalyx. How are you doing today?`;
-      } else {
-        initialGreeting = `Hello ${contact.name}! This is Alex calling from Vocalyx. How are you doing today?`;
-      }
-    }
-
-    toast.success(`Call started — ${mode} mode`);
+    toast.success(`Call started — ${mode} mode (${simPrewarm.getPersonaName()})`);
 
     if (initialGreeting) {
       state.transcript.push({ role: 'agent', text: initialGreeting });
 
-      let audioUrl = null;
-      if (state.backendOk) {
-        const simSel = document.getElementById('sim-tts-engine');
-        const ttsEngine = simSel?.value || 'f5tts';
-        const activeVoiceId = simSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
-
-        // Instant 0.0s start only if greeting already pre-warmed for this exact voice (English only)
-        const prewarmMatchesVoice = !activeVoiceId || !voicePrewarmManager.activeVoiceId || String(activeVoiceId) === String(voicePrewarmManager.activeVoiceId);
-        if (voicePrewarmManager.isReady && voicePrewarmManager.greetingUrl && simLang === 'en-US' && prewarmMatchesVoice) {
-          audioUrl = voicePrewarmManager.greetingUrl;
-        } else {
-          simulator.setPipelineStatus('synthesizing', `Generating Alex greeting (${ttsEngine.toUpperCase()})...`);
-          try {
-            const res = await Promise.race([
-              api.post('/api/tts', {
-                text: initialGreeting,
-                engine: ttsEngine,
-                voice_id: activeVoiceId ? parseInt(activeVoiceId) : null,
-              }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 20000)),
-            ]);
-            if (res && res.audio_url) {
-              audioUrl = res.audio_url;
-            }
-          } catch (err) {
-            console.warn('[TTS] Greeting synthesis issue:', err);
-            simulator.setPipelineStatus('error', 'Voice generation slow or failed on server');
+      if (state.backendOk && !audioUrl) {
+        simulator.setPipelineStatus('synthesizing', `Generating ${simPrewarm.getPersonaName()} greeting...`);
+        try {
+          const res = await Promise.race([
+            api.post('/api/tts', {
+              text: initialGreeting,
+              engine: ttsEngine,
+              voice_id: activeVoiceId ? parseInt(activeVoiceId) : null,
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 20000)),
+          ]);
+          if (res && res.audio_url) {
+            audioUrl = res.audio_url;
           }
+        } catch (err) {
+          console.warn('[TTS] Greeting synthesis issue:', err);
+          simulator.setPipelineStatus('error', 'Voice generation slow or failed on server');
         }
       }
 
@@ -1067,7 +1009,7 @@ const simulator = {
 
     simulator.setMicState('idle');
     simulator.setPipelineStatus('ready', 'Call Ended');
-    document.getElementById('btn-start-call').disabled = false;
+    document.getElementById('btn-start-call').disabled = !simPrewarm.isWarmedForCurrent();
     document.getElementById('btn-end-call').disabled   = true;
 
     if (!state.transcript.length) {
@@ -1492,10 +1434,11 @@ const simulator = {
     const placeholder = log.querySelector('.conv-placeholder');
     if (placeholder) placeholder.remove();
 
+    const persona = (typeof simPrewarm !== 'undefined' && simPrewarm.getPersonaName) ? simPrewarm.getPersonaName() : 'Alex';
     const div = document.createElement('div');
     div.className = `conv-bubble ${role}`;
     div.innerHTML = `
-      <div class="conv-bubble-role">${role === 'user' ? '🎤 You' : '👤 Alex'}</div>
+      <div class="conv-bubble-role">${role === 'user' ? '🎤 You' : `👤 ${escapeHtml(persona)}`}</div>
       <div class="conv-bubble-text">${escapeHtml(text)}</div>
     `;
     log.appendChild(div);
@@ -1916,7 +1859,14 @@ const voicesManager = {
 
       await this.loadVoices();
       if (typeof voicePrewarmManager !== 'undefined') {
-        voicePrewarmManager.checkStatus();
+        voicePrewarmManager.invalidate(activateNow
+          ? `Voice "${res.name}" activated — click Re-Warm before dialing.`
+          : 'Click Re-Warm Voice before dialing.');
+      }
+      if (typeof simPrewarm !== 'undefined') {
+        simPrewarm.invalidate(activateNow
+          ? `Voice "${res.name}" activated — click Re-Warm before Start Call.`
+          : 'Click Re-Warm Voice before Start Call.');
       }
 
       if (activateNow) {
@@ -1935,10 +1885,13 @@ const voicesManager = {
       const res = await api.activateVoice(voiceId);
       if (res && res.success) {
         this._preferredVoiceId = String(res.active_voice?.id || voiceId);
-        toast.success(`Voice "${res.active_voice.name}" is now active!`);
+        toast.success(`Voice "${res.active_voice.name}" set active! Click Re-Warm before calling.`);
         await this.loadVoices();
         if (typeof voicePrewarmManager !== 'undefined') {
-          voicePrewarmManager.checkStatus();
+          voicePrewarmManager.invalidate(`Active voice set to ${res.active_voice.name} — click Re-Warm before dialing.`);
+        }
+        if (typeof simPrewarm !== 'undefined') {
+          simPrewarm.invalidate(`Active voice set to ${res.active_voice.name} — click Re-Warm before Start Call.`);
         }
       }
     } catch (e) {
@@ -2043,7 +1996,7 @@ const voicesManager = {
 
     const restoreVoiceSelection = (sel, prevVoiceId, prevEngineVal) => {
       if (!sel) return;
-      const targetVoiceId = this._preferredVoiceId || (activeVoice ? String(activeVoice.id) : null) || prevVoiceId;
+      const targetVoiceId = this._preferredVoiceId || prevVoiceId || (activeVoice ? String(activeVoice.id) : null);
       const opts = Array.from(sel.options);
       let idx = targetVoiceId ? opts.findIndex(o => o.dataset.voiceId === String(targetVoiceId)) : -1;
       if (idx < 0 && prevEngineVal) {
@@ -2072,26 +2025,13 @@ const voicesManager = {
       if (typeof languageEngineSync !== 'undefined') {
         languageEngineSync.syncFromLanguage(sLang, simSel);
       }
-      const badge = document.getElementById('sim-tts-badge');
-      const selOpt = simSel.selectedOptions?.[0];
-      const chosenV = this.voices.find(v => String(v.id) === String(selOpt?.dataset?.voiceId)) || activeVoice;
-      if (badge && chosenV) badge.textContent = `${(chosenV.engine || 'f5tts').toUpperCase()} Active`;
+    }
 
-      const modelTag = document.getElementById('sim-model-tag');
-      if (modelTag && chosenV) {
-        const shortName = (chosenV.name || '').split('(')[0].trim() || (chosenV.engine || 'F5-TTS').toUpperCase();
-        modelTag.innerHTML = `<i data-lucide="cpu"></i> Groq LLaMA / ${escapeHtml(shortName)}`;
-        lucide.createIcons({ nodes: [modelTag] });
-      }
-
-      const prevBtn = document.getElementById('btn-sim-preview-prewarm');
-      if (prevBtn && chosenV) {
-        prevBtn.dataset.voiceId = String(chosenV.id || '');
-        if (chosenV.preview_url) {
-          prevBtn.dataset.url = chosenV.preview_url;
-          prevBtn.style.display = 'inline-flex';
-        }
-      }
+    if (typeof voicePrewarmManager !== 'undefined') {
+      voicePrewarmManager.syncUi();
+    }
+    if (typeof simPrewarm !== 'undefined') {
+      simPrewarm.syncUi();
     }
   }
 };
@@ -2365,12 +2305,10 @@ const twilioManager = {
     if (badge) badge.textContent = info.badge;
     if (hint) hint.textContent = info.hint;
     if (prewarmBox) {
-      if (!info.isCloned) {
-        prewarmBox.style.display = 'none';
-      } else {
-        prewarmBox.style.display = 'block';
-        if (label) label.textContent = `Ready ${activeEngine.toUpperCase()} Voice`;
-      }
+      prewarmBox.style.display = 'block';
+    }
+    if (typeof voicePrewarmManager !== 'undefined' && voicePrewarmManager.syncUi) {
+      voicePrewarmManager.syncUi();
     }
   },
 
@@ -2463,14 +2401,19 @@ const twilioManager = {
 
     const contactId = document.getElementById('phone-contact-select')?.value || simulator.getActiveContactId();
     const mode = 'outbound';
-    const voiceEngine = document.getElementById('phone-tts-engine')?.value || document.getElementById('twilio-voice-select')?.value || 'f5tts';
+    const phoneSel = document.getElementById('phone-tts-engine');
+    const voiceEngine = phoneSel?.value || document.getElementById('twilio-voice-select')?.value || 'f5tts';
+    const voiceId = phoneSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
     const callLang = document.getElementById('phone-call-language')?.value || state.selectedLanguage || 'en-US';
 
-    if (voiceEngine !== 'polly' && typeof voicePrewarmManager !== 'undefined' && !voicePrewarmManager.isReady) {
-      toast.info(`Initiating call with ${voiceEngine.toUpperCase()}... Tip: Click "Ready ${voiceEngine.toUpperCase()} Voice" for instant 0.0s greeting.`);
-    } else {
-      toast.info(`Dialing real phone: ${number} via ${voiceEngine.toUpperCase()}...`);
+    if (typeof voicePrewarmManager !== 'undefined' && !voicePrewarmManager.isWarmedForCurrent()) {
+      voicePrewarmManager.invalidate();
+      toast.error('Mandatory: Click "Re-Warm Voice" above before calling a real phone.');
+      document.getElementById('btn-prewarm-voice')?.focus();
+      return;
     }
+
+    toast.info(`Dialing real phone: ${number} via ${voicePrewarmManager.getPersonaName()} (${voiceEngine.toUpperCase()})...`);
     try {
       const res = await api.dialPhone({
         to_number: number,
@@ -2478,6 +2421,7 @@ const twilioManager = {
         mode: mode,
         public_url: api.base,
         voice_engine: voiceEngine,
+        voice_id: voiceId ? parseInt(voiceId) : null,
         language: callLang,
       });
 
@@ -2889,157 +2833,214 @@ const voicePrewarmManager = {
   isReady: false,
   greetingUrl: null,
   activeVoiceId: null,
+  warmedSignature: null,
+  warmedData: null,
+  _pollingStatus: false,
 
-  async checkStatus() {
+  _personaFromVoiceOrEngine(voiceObj, engine) {
+    if (voiceObj && voiceObj.name) {
+      const clean = voiceObj.name.split('(')[0].split('—')[0].trim();
+      if (clean.toLowerCase().startsWith('alex')) return 'Alex';
+      if (clean) return clean;
+    }
+    const e = String(engine || 'f5tts').toLowerCase();
+    const map = {
+      polly: 'Matthew',
+      polly_joanna: 'Joanna',
+      edge_tts_kannada_male: 'Gagan',
+      edge_tts_kannada: 'Sapna',
+      edge_tts_hindi_male: 'Madhur',
+      edge_tts_hindi: 'Swara',
+      edge_tts_en_us_female: 'Jenny',
+      edge_tts_en_us_male: 'Guy',
+      edge_tts_en_uk: 'Sonia',
+      edge_tts_en_in: 'Neerja',
+    };
+    return map[e] || 'Alex';
+  },
+
+  getSelectedContext() {
+    const phoneSel = document.getElementById('phone-tts-engine');
+    const engine = phoneSel?.value || 'f5tts';
+    const selOpt = phoneSel?.selectedOptions?.[0] || null;
+    const voiceId = selOpt?.dataset?.voiceId ? String(selOpt.dataset.voiceId) : '';
+    const language = document.getElementById('phone-call-language')?.value || state.selectedLanguage || 'en-US';
+    const contactId = document.getElementById('phone-contact-select')?.value || '';
+    const contact = (state.contacts || []).find(c => String(c.id) === String(contactId)) || null;
+    const contactName = contact?.name || '';
+    const voiceObj = voiceId && typeof voicesManager !== 'undefined'
+      ? (voicesManager.voices || []).find(v => String(v.id) === voiceId) || null
+      : null;
+    return { engine, voiceId, voiceObj, language, contactId, contactName };
+  },
+
+  getSignature() {
+    const ctx = this.getSelectedContext();
+    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|outbound`;
+  },
+
+  isWarmedForCurrent() {
+    return Boolean(this.warmedSignature && this.warmedSignature === this.getSignature());
+  },
+
+  getPersonaName() {
+    if (this.isWarmedForCurrent() && this.warmedData?.persona_name) {
+      return this.warmedData.persona_name;
+    }
+    const ctx = this.getSelectedContext();
+    return this._personaFromVoiceOrEngine(ctx.voiceObj, ctx.engine);
+  },
+
+  syncUi(reason = null) {
+    const warmed = this.isWarmedForCurrent();
+    const ctx = this.getSelectedContext();
+    const persona = this.getPersonaName();
     const badge = document.getElementById('voice-prewarm-badge');
     const label = document.getElementById('btn-prewarm-label');
     const prevBtn = document.getElementById('btn-preview-greeting');
     const hint = document.getElementById('voice-prewarm-hint');
-    const simPrevBtn = document.getElementById('btn-sim-preview-prewarm');
-    if (!badge) return;
+    const dialBtn = document.getElementById('btn-dial-twilio');
 
-    try {
-      const res = await api.getPrewarmStatus();
-      if (res && res.ready) {
-        this.isReady = true;
-        this.greetingUrl = res.greeting_url;
-        this.activeVoiceId = res.active_voice_id ? String(res.active_voice_id) : this.activeVoiceId;
-        badge.className = 'badge badge-lime';
-        badge.textContent = '🟢 Ready (0.0s)';
-        if (label) label.textContent = 'Re-Warm Voice';
-        if (prevBtn) prevBtn.style.display = 'inline-flex';
-        if (simPrevBtn) {
-          simPrevBtn.style.display = 'inline-flex';
-          if (res.greeting_url) simPrevBtn.dataset.url = res.greeting_url;
-          if (this.activeVoiceId) simPrevBtn.dataset.voiceId = this.activeVoiceId;
-        }
-        const vLabel = res.active_voice_name ? `${escapeHtml(res.active_voice_name)} greeting` : 'Cloned voice greeting';
-        if (hint) hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${vLabel} is ready on disk. Phone call will connect with 0.0s delay!</span>`;
+    if (dialBtn && !state.twilioCallActive) {
+      dialBtn.disabled = !warmed;
+      dialBtn.title = warmed
+        ? `Ready to call as ${persona}`
+        : `Click Re-Warm Voice first to prepare ${persona} before dialing`;
+    }
+    if (badge) {
+      badge.className = warmed ? 'badge badge-lime' : 'badge badge-yellow';
+      badge.textContent = warmed ? `🟢 Ready (${persona})` : 'Re-Warm Required';
+    }
+    if (label) {
+      label.textContent = warmed ? `Re-Warm (${persona} Ready)` : 'Re-Warm Voice (Required)';
+    }
+    if (prevBtn) {
+      const previewUrl = warmed
+        ? (this.warmedData?.greeting_url || this.greetingUrl)
+        : (ctx.voiceObj?.preview_url || '');
+      if (previewUrl) {
+        prevBtn.style.display = 'inline-flex';
+        prevBtn.dataset.url = previewUrl;
+        prevBtn.dataset.voiceId = ctx.voiceId || '';
       } else {
-        this.isReady = false;
-        badge.className = 'badge badge-grey';
-        badge.textContent = 'Not Ready';
-        if (label) label.textContent = 'Ready Cloned Voice';
-        if (prevBtn) prevBtn.style.display = 'none';
-        if (hint) hint.textContent = 'Pre-computes cloned voice weights into GPU memory so your call connects with 0 delay.';
+        prevBtn.style.display = 'none';
+        prevBtn.dataset.url = '';
       }
-    } catch (e) {
-      if (badge) {
-        badge.className = 'badge badge-grey';
-        badge.textContent = 'Offline / Standby';
+    }
+    if (hint) {
+      if (warmed) {
+        const snippet = this.warmedData?.greeting_text
+          ? ` — "${escapeHtml(this.warmedData.greeting_text.slice(0, 75))}${this.warmedData.greeting_text.length > 75 ? '…' : ''}"`
+          : '';
+        hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${escapeHtml(persona)} (${escapeHtml(ctx.engine.toUpperCase())}, ${escapeHtml(ctx.language)}) warmed &amp; ready${snippet}</span>`;
+      } else {
+        const msg = reason || `Select voice, contact &amp; language, then click Re-Warm to lock ${escapeHtml(persona)} before calling.`;
+        hint.innerHTML = `<span style="color:#f59e0b;">⚠ ${escapeHtml(reason ? reason : '') || msg}</span>`;
       }
     }
     if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
   },
 
+  invalidate(reason = null) {
+    this.isReady = false;
+    this.warmedSignature = null;
+    this.warmedData = null;
+    this.greetingUrl = null;
+    this.syncUi(reason);
+  },
+
+  async checkStatus() {
+    const badge = document.getElementById('voice-prewarm-badge');
+    if (!badge) return;
+    try {
+      const res = await api.getPrewarmStatus();
+      if (res && res.ready) {
+        this.activeVoiceId = res.active_voice_id ? String(res.active_voice_id) : this.activeVoiceId;
+        if (this.isWarmedForCurrent() && res.greeting_url) {
+          this.greetingUrl = res.greeting_url;
+        }
+      }
+    } catch (_) {
+      // Keep UI locked for mandatory Re-Warm even if status check fails
+    }
+    this.syncUi();
+  },
+
   async prewarm() {
-    const phoneSel = document.getElementById('phone-tts-engine');
-    const activeEngine = phoneSel?.value || 'f5tts';
-    const voiceId = phoneSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
+    const ctx = this.getSelectedContext();
+    const activeEngine = ctx.engine || 'f5tts';
+    const voiceId = ctx.voiceId || null;
+    const persona = this._personaFromVoiceOrEngine(ctx.voiceObj, activeEngine);
+    const sig = this.getSignature();
     const badge = document.getElementById('voice-prewarm-badge');
     const btn = document.getElementById('btn-prewarm-voice');
     const label = document.getElementById('btn-prewarm-label');
-    const prevBtn = document.getElementById('btn-preview-greeting');
     const hint = document.getElementById('voice-prewarm-hint');
-
-    if (activeEngine === 'polly') {
-      toast.info('Amazon Polly Matthew requires no pre-warming — native Twilio telephony is always ready.');
-      return;
-    }
 
     if (btn) btn.disabled = true;
     if (badge) {
       badge.className = 'badge badge-yellow';
-      badge.textContent = `⏳ Warming ${activeEngine.toUpperCase()}...`;
+      badge.textContent = `⏳ Warming ${persona}...`;
     }
-    if (hint) hint.textContent = `Allocating GPU and pre-computing ${activeEngine.toUpperCase()} voice conditioning...`;
-    toast.info(`Warming up ${activeEngine.toUpperCase()} and generating cloned voice greeting...`);
+    if (label) label.textContent = `Warming ${persona}...`;
+    if (hint) hint.textContent = `Locking ${persona} (${activeEngine.toUpperCase()}, ${ctx.language}) and pre-generating greeting...`;
+    toast.info(`Warming ${persona} (${activeEngine.toUpperCase()}) for Real Phone Call...`);
 
-    // Poll status every 2.5s while the model is warming up
-    let completedViaPoll = false;
-    const pollInterval = setInterval(async () => {
-      try {
-        const s = await api.getPrewarmStatus();
-        if (s && s.ready) {
-          completedViaPoll = true;
-          this.isReady = true;
-          this.greetingUrl = s.greeting_url;
-          if (badge) {
-            badge.className = 'badge badge-lime';
-            badge.textContent = '🟢 Ready (0.0s)';
-          }
-          if (label) label.textContent = `Re-Warm ${activeEngine.toUpperCase()}`;
-          if (prevBtn) prevBtn.style.display = 'inline-flex';
-          if (hint) hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${activeEngine.toUpperCase()} cloned voice ready! Saved to disk. Ready to call.</span>`;
-        }
-      } catch {}
-    }, 2500);
+    this.warmedSignature = null;
+    this.warmedData = null;
+    this.isReady = false;
 
     try {
-      const res = await api.prewarmVoice(activeEngine, voiceId);
-      clearInterval(pollInterval);
+      const res = await api.prewarmVoice(activeEngine, voiceId, {
+        language: ctx.language,
+        contact_id: ctx.contactId || null,
+        contact_name: ctx.contactName || null,
+        mode: 'outbound',
+      });
       if (res && res.ready) {
         this.isReady = true;
-        this.greetingUrl = res.greeting_url;
-        this.activeVoiceId = res.voice_id ? String(res.voice_id) : voiceId;
-        if (badge) {
-          badge.className = 'badge badge-lime';
-          badge.textContent = '🟢 Ready (0.0s)';
+        this.warmedSignature = sig;
+        this.warmedData = res;
+        this.greetingUrl = res.greeting_url || null;
+        this.activeVoiceId = res.voice_id ? String(res.voice_id) : (voiceId || null);
+        if (voiceId && typeof voicesManager !== 'undefined' && Array.isArray(voicesManager.voices)) {
+          voicesManager._preferredVoiceId = String(voiceId);
+          voicesManager.voices.forEach(v => { v.is_active = String(v.id) === String(voiceId); });
         }
-        if (label) label.textContent = `Re-Warm ${activeEngine.toUpperCase()}`;
-        if (prevBtn) prevBtn.style.display = 'inline-flex';
-        if (hint) hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${activeEngine.toUpperCase()} ready in ${res.elapsed_seconds}s! Ready to call.</span>`;
-        toast.success(`Voice engine (${activeEngine.toUpperCase()}) ready! (${res.elapsed_seconds}s).`);
-      } else if (!completedViaPoll) {
-        throw new Error(res.message || 'Pre-warm failed');
+        this.syncUi();
+        toast.success(`${res.persona_name || persona} (${activeEngine.toUpperCase()}) ready in ${res.elapsed_seconds || '0.1'}s!`);
+      } else {
+        throw new Error(res?.message || 'Pre-warm failed');
       }
     } catch (e) {
-      clearInterval(pollInterval);
-      // Double check if backend finished despite network abort/timeout
-      try {
-        const s = await api.getPrewarmStatus();
-        if (s && s.ready) {
-          this.isReady = true;
-          this.greetingUrl = s.greeting_url;
-          if (badge) {
-            badge.className = 'badge badge-lime';
-            badge.textContent = '🟢 Ready (0.0s)';
-          }
-          if (label) label.textContent = 'Re-Warm Voice';
-          if (prevBtn) prevBtn.style.display = 'inline-flex';
-          if (hint) hint.innerHTML = '<span style="color:var(--color-lime,#c5f82a);">✓ Cloned voice ready! Saved to disk. Ready to call.</span>';
-          toast.success('Voice engine ready! Saved to disk. Ready to call.');
-          return;
-        }
-      } catch {}
-
+      this.warmedSignature = null;
+      this.warmedData = null;
+      this.isReady = false;
       if (badge) {
         badge.className = 'badge badge-red';
         badge.textContent = 'Pre-Warm Failed';
       }
-      if (hint) hint.textContent = `Error: ${e.message}`;
+      if (label) label.textContent = 'Retry Re-Warm Voice';
+      if (hint) hint.innerHTML = `<span style="color:#ef4444;">✗ Pre-warm error: ${escapeHtml(e.message)}</span>`;
+      const dialBtn = document.getElementById('btn-dial-twilio');
+      if (dialBtn) dialBtn.disabled = true;
       toast.error(`Pre-warm error: ${e.message}`);
     } finally {
-      clearInterval(pollInterval);
       if (btn) btn.disabled = false;
       if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
     }
   },
 
   async preview() {
-    const phoneSel = document.getElementById('phone-tts-engine');
-    const selVoiceId = phoneSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
-    const matchedVoice = selVoiceId && typeof voicesManager !== 'undefined'
-      ? (voicesManager.voices || []).find(v => String(v.id) === String(selVoiceId))
-      : null;
-    const rawUrl = (matchedVoice && String(selVoiceId) !== String(this.activeVoiceId) && matchedVoice.preview_url)
-      ? matchedVoice.preview_url
-      : (this.greetingUrl || matchedVoice?.preview_url);
+    const ctx = this.getSelectedContext();
+    const persona = this.getPersonaName();
+    const warmedUrl = this.isWarmedForCurrent() ? (this.warmedData?.greeting_url || this.greetingUrl) : null;
+    const rawUrl = warmedUrl || ctx.voiceObj?.preview_url || null;
     if (!rawUrl) {
-      toast.info('No pre-warmed greeting available yet. Click "Ready Cloned Voice" to generate.');
+      toast.info(`Click Re-Warm Voice first to generate and preview ${persona}'s greeting.`);
       return;
     }
-    toast.info('Loading voice greeting audio...');
+    toast.info(`Loading ${persona} voice preview...`);
     try {
       const baseFull = rawUrl.startsWith('http') ? rawUrl : `${api.base.replace(/\/$/, '')}${rawUrl}`;
       const fullUrl = `${baseFull}${baseFull.includes('?') ? '&' : '?'}t=${Date.now()}`;
@@ -3048,7 +3049,7 @@ const voicePrewarmManager = {
       audio.onended = () => URL.revokeObjectURL(blobUrl);
       audio.onerror = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
-      toast.success(`Playing ${matchedVoice?.name || 'pre-warmed voice'} greeting!`);
+      toast.success(warmedUrl ? `Playing warmed ${persona} greeting!` : `Playing ${persona} sample preview!`);
     } catch (e) {
       toast.error(`Audio playback note: ${e.message}`);
     }
@@ -3057,42 +3058,178 @@ const voicePrewarmManager = {
 
 /* ─── Call Simulator Voice Re-Warm Manager ──────────────────────── */
 const simPrewarm = {
-  async prewarm() {
+  isReady: false,
+  greetingUrl: null,
+  activeVoiceId: null,
+  warmedSignature: null,
+  warmedData: null,
+
+  getSelectedContext() {
     const simSel = document.getElementById('sim-tts-engine');
     const engine = simSel?.value || 'f5tts';
-    const selOpt = simSel?.selectedOptions?.[0];
-    const voiceId = selOpt?.dataset?.voiceId || null;
-    const btn = document.getElementById('btn-sim-prewarm');
+    const selOpt = simSel?.selectedOptions?.[0] || null;
+    const voiceId = selOpt?.dataset?.voiceId ? String(selOpt.dataset.voiceId) : '';
+    const language = document.getElementById('sim-language')?.value || state.selectedLanguage || 'en-US';
+    const mode = state.callMode || 'outbound';
+
+    let contactId = '';
+    let contact = null;
+    if (mode === 'outbound') {
+      contactId = document.getElementById('contact-select')?.value || '';
+      contact = (state.contacts || []).find(c => String(c.id) === String(contactId)) || null;
+    } else if (mode === 'marketing') {
+      contactId = document.getElementById('contact-select-mkt')?.value || '';
+      contact = (state.contacts || []).find(c => String(c.id) === String(contactId)) || null;
+    } else {
+      const inPhone = (document.getElementById('phone-input-inbound')?.value || '').trim();
+      const cleanIn = inPhone.replace(/[^0-9+]/g, '');
+      contact = state.currentContact || (cleanIn
+        ? (state.contacts || []).find(c => (c.phone_number || '').replace(/[^0-9+]/g, '') === cleanIn) || null
+        : null);
+      contactId = contact?.id ? String(contact.id) : (inPhone || '');
+    }
+
+    const voiceObj = voiceId && typeof voicesManager !== 'undefined'
+      ? (voicesManager.voices || []).find(v => String(v.id) === voiceId) || null
+      : null;
+
+    return {
+      engine,
+      voiceId,
+      voiceObj,
+      language,
+      mode,
+      contactId,
+      contactName: contact?.name || '',
+    };
+  },
+
+  getSignature() {
+    const ctx = this.getSelectedContext();
+    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|${ctx.mode}`;
+  },
+
+  isWarmedForCurrent() {
+    return Boolean(this.warmedSignature && this.warmedSignature === this.getSignature());
+  },
+
+  getPersonaName() {
+    if (this.isWarmedForCurrent() && this.warmedData?.persona_name) {
+      return this.warmedData.persona_name;
+    }
+    const ctx = this.getSelectedContext();
+    return voicePrewarmManager._personaFromVoiceOrEngine(ctx.voiceObj, ctx.engine);
+  },
+
+  syncUi(reason = null) {
+    const warmed = this.isWarmedForCurrent();
+    const ctx = this.getSelectedContext();
+    const persona = this.getPersonaName();
+    const startBtn = document.getElementById('btn-start-call');
     const label = document.getElementById('btn-sim-prewarm-label');
     const prevBtn = document.getElementById('btn-sim-preview-prewarm');
     const hint = document.getElementById('sim-prewarm-hint');
+    const badge = document.getElementById('sim-tts-badge');
+    const modelTag = document.getElementById('sim-model-tag');
+
+    if (startBtn) {
+      startBtn.disabled = state.callActive || !warmed;
+      startBtn.title = warmed
+        ? `Start call as ${persona}`
+        : `Click Re-Warm Voice first to lock ${persona} before Start Call`;
+    }
+    if (badge) {
+      badge.textContent = `${persona} · ${ctx.engine.toUpperCase()}`;
+    }
+    if (modelTag) {
+      modelTag.innerHTML = `<i data-lucide="cpu"></i> Groq LLaMA / ${escapeHtml(persona)}`;
+      lucide.createIcons({ nodes: [modelTag] });
+    }
+    if (label) {
+      label.textContent = warmed ? `Re-Warm (${persona} Ready)` : 'Re-Warm Voice (Required)';
+    }
+    if (prevBtn) {
+      const previewUrl = warmed
+        ? (this.warmedData?.greeting_url || this.greetingUrl)
+        : (ctx.voiceObj?.preview_url || '');
+      if (previewUrl) {
+        prevBtn.style.display = 'inline-flex';
+        prevBtn.dataset.url = previewUrl;
+        prevBtn.dataset.voiceId = ctx.voiceId || '';
+      } else {
+        prevBtn.style.display = 'none';
+        prevBtn.dataset.url = '';
+      }
+    }
+    if (hint) {
+      if (warmed) {
+        const snippet = this.warmedData?.greeting_text
+          ? ` Greeting: "${escapeHtml(this.warmedData.greeting_text.slice(0, 75))}${this.warmedData.greeting_text.length > 75 ? '…' : ''}"`
+          : '';
+        hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${escapeHtml(persona)} (${escapeHtml(ctx.engine.toUpperCase())}) ready with 0.0s delay.${snippet}</span>`;
+      } else {
+        hint.innerHTML = `<span style="color:#f59e0b;">⚠ ${escapeHtml(reason || `Click Re-Warm Voice to lock ${persona} (${ctx.language}) before starting call.`)}</span>`;
+      }
+    }
+    if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+  },
+
+  invalidate(reason = null) {
+    this.isReady = false;
+    this.warmedSignature = null;
+    this.warmedData = null;
+    this.greetingUrl = null;
+    this.syncUi(reason);
+  },
+
+  async prewarm() {
+    const ctx = this.getSelectedContext();
+    const engine = ctx.engine || 'f5tts';
+    const voiceId = ctx.voiceId || null;
+    const persona = this._personaNameOverride || voicePrewarmManager._personaFromVoiceOrEngine(ctx.voiceObj, engine);
+    const sig = this.getSignature();
+    const btn = document.getElementById('btn-sim-prewarm');
+    const label = document.getElementById('btn-sim-prewarm-label');
+    const hint = document.getElementById('sim-prewarm-hint');
 
     if (btn) btn.disabled = true;
-    if (label) label.textContent = `Warming ${engine.toUpperCase()}...`;
-    if (hint) hint.textContent = `Allocating GPU memory and caching voice weights...`;
-    toast.info(`Pre-warming selected voice (${engine.toUpperCase()}) for Call Simulator...`);
+    if (label) label.textContent = `Warming ${persona}...`;
+    if (hint) hint.textContent = `Locking ${persona} (${engine.toUpperCase()}, ${ctx.language}) and generating greeting...`;
+    toast.info(`Pre-warming ${persona} (${engine.toUpperCase()}) for Call Simulator...`);
+
+    this.warmedSignature = null;
+    this.warmedData = null;
+    this.isReady = false;
 
     try {
-      const res = await api.prewarmVoice(engine, voiceId);
+      const res = await api.prewarmVoice(engine, voiceId, {
+        language: ctx.language,
+        contact_id: ctx.contactId && !isNaN(Number(ctx.contactId)) ? ctx.contactId : null,
+        contact_name: ctx.contactName || null,
+        mode: ctx.mode || 'outbound',
+      });
       if (res && res.ready) {
-        voicePrewarmManager.isReady = true;
-        voicePrewarmManager.greetingUrl = res.greeting_url || '/tts_output/prewarmed_greeting.wav';
-        voicePrewarmManager.activeVoiceId = res.voice_id ? String(res.voice_id) : (voiceId ? String(voiceId) : null);
-        if (label) label.textContent = `Re-Warm (Ready)`;
-        if (prevBtn) {
-          prevBtn.style.display = 'inline-flex';
-          prevBtn.dataset.url = res.greeting_url || '/tts_output/prewarmed_greeting.wav';
-          prevBtn.dataset.voiceId = voicePrewarmManager.activeVoiceId || '';
+        this.isReady = true;
+        this.warmedSignature = sig;
+        this.warmedData = res;
+        this.greetingUrl = res.greeting_url || null;
+        this.activeVoiceId = res.voice_id ? String(res.voice_id) : (voiceId || null);
+        if (voiceId && typeof voicesManager !== 'undefined' && Array.isArray(voicesManager.voices)) {
+          voicesManager._preferredVoiceId = String(voiceId);
+          voicesManager.voices.forEach(v => { v.is_active = String(v.id) === String(voiceId); });
         }
-        const vName = res.voice_name || selOpt?.textContent?.split('—')?.[0]?.trim() || engine.toUpperCase();
-        if (hint) hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${escapeHtml(vName)} ready! Starting call plays with 0.0s delay.</span>`;
+        this.syncUi();
+        const vName = res.persona_name || res.voice_name || persona;
         toast.success(`✓ ${vName} pre-warmed and ready (${res.elapsed_seconds || '0.1'}s)!`);
       } else {
-        throw new Error(res.message || 'Prewarm incomplete');
+        throw new Error(res?.message || 'Prewarm incomplete');
       }
     } catch (err) {
-      toast.error(`Prewarm note: ${err.message}`);
-      if (label) label.textContent = `Re-Warm Selected Voice`;
+      this.warmedSignature = null;
+      this.warmedData = null;
+      this.isReady = false;
+      this.syncUi(`Prewarm failed: ${err.message}`);
+      toast.error(`Prewarm failed: ${err.message}`);
     } finally {
       if (btn) btn.disabled = false;
       if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
@@ -3100,26 +3237,22 @@ const simPrewarm = {
   },
 
   async preview() {
-    const simSel = document.getElementById('sim-tts-engine');
-    const selOpt = simSel?.selectedOptions?.[0];
-    const selVoiceId = selOpt?.dataset?.voiceId || null;
-    const selEngine = simSel?.value || 'f5tts';
-    const matchedVoice = typeof voicesManager !== 'undefined'
-      ? ((voicesManager.voices || []).find(v => selVoiceId && String(v.id) === String(selVoiceId))
-        || (voicesManager.voices || []).find(v => v.engine === selEngine))
-      : null;
+    const ctx = this.getSelectedContext();
+    const persona = this.getPersonaName();
+    const matchedVoice = ctx.voiceObj || (
+      !ctx.voiceId && typeof voicesManager !== 'undefined'
+        ? (voicesManager.voices || []).find(v => v.engine === ctx.engine)
+        : null
+    );
+    const warmedUrl = this.isWarmedForCurrent() ? (this.warmedData?.greeting_url || this.greetingUrl) : null;
+    const rawUrl = warmedUrl || matchedVoice?.preview_url || null;
 
-    const prevBtn = document.getElementById('btn-sim-preview-prewarm');
-    let rawUrl = null;
-    if (prevBtn?.dataset?.url && (!selVoiceId || prevBtn.dataset.voiceId === String(selVoiceId))) {
-      rawUrl = prevBtn.dataset.url;
-    } else if (matchedVoice?.preview_url) {
-      rawUrl = matchedVoice.preview_url;
-    } else {
-      rawUrl = voicePrewarmManager.greetingUrl || '/tts_output/prewarmed_greeting.wav';
+    if (!rawUrl) {
+      toast.info(`Click Re-Warm Voice first to generate and preview ${persona}'s greeting.`);
+      return;
     }
 
-    toast.info(`Loading ${matchedVoice?.name || 'selected voice'} preview...`);
+    toast.info(`Loading ${persona} preview...`);
     try {
       const baseFull = rawUrl.startsWith('http') ? rawUrl : `${api.base.replace(/\/$/, '')}${rawUrl}`;
       const fullUrl = `${baseFull}${baseFull.includes('?') ? '&' : '?'}t=${Date.now()}`;
@@ -3128,7 +3261,7 @@ const simPrewarm = {
       audio.onended = () => URL.revokeObjectURL(blobUrl);
       audio.onerror = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
-      toast.success(`Playing ${matchedVoice?.name || 'voice'} preview!`);
+      toast.success(warmedUrl ? `Playing warmed ${persona} greeting!` : `Playing ${persona} voice preview!`);
     } catch (e) {
       toast.error(`Playback note: ${e.message}`);
     }
@@ -3154,6 +3287,9 @@ function bindCallModeTabs() {
       // Reset caller match
       if (state.callMode !== 'inbound') {
         state.currentContact = null;
+      }
+      if (typeof simPrewarm !== 'undefined') {
+        simPrewarm.invalidate('Call mode changed — click Re-Warm before Start Call.');
       }
     });
   });
@@ -3375,26 +3511,26 @@ function bindEvents() {
   document.getElementById('btn-quick-twilio-settings')?.addEventListener('click', () => ui.showSection('settings'));
 
   // ── Telephony Voice Engine Synchronization ──
-  const syncTelephonyEngine = (val) => {
+  const syncTelephonyEngine = (val, voiceId = null) => {
+    if (voiceId && typeof voicesManager !== 'undefined') {
+      voicesManager._preferredVoiceId = String(voiceId);
+    }
     twilioManager.updateEngineBadge(val);
     if (state.twilioConfig) state.twilioConfig.voice_engine = val;
     api.updateTwilioConfig({ voice_engine: val, public_base_url: api.base }).catch(() => {});
-    if (val !== 'polly' && typeof voicePrewarmManager !== 'undefined') {
-      voicePrewarmManager.checkStatus();
+    if (typeof voicePrewarmManager !== 'undefined') {
+      voicePrewarmManager.invalidate('Voice changed — click Re-Warm before dialing.');
     }
-    toast.info(`Telephony voice engine set to: ${val.toUpperCase()}`);
   };
 
   document.getElementById('phone-tts-engine')?.addEventListener('change', (e) => {
     const opt = e.target.selectedOptions ? e.target.selectedOptions[0] : null;
     const voiceId = opt ? opt.dataset.voiceId : null;
-    if (voiceId) {
-      voicesManager.activate(voiceId);
-    } else {
-      syncTelephonyEngine(e.target.value);
-    }
     const phoneLang = document.getElementById('phone-call-language');
     if (phoneLang) languageEngineSync.syncFromEngine(e.target.value, phoneLang);
+    syncTelephonyEngine(e.target.value, voiceId);
+    const persona = typeof voicePrewarmManager !== 'undefined' ? voicePrewarmManager.getPersonaName() : e.target.value.toUpperCase();
+    toast.info(`Selected ${persona} — click Re-Warm Voice before calling.`);
   });
 
   document.getElementById('phone-call-language')?.addEventListener('change', (e) => {
@@ -3402,7 +3538,10 @@ function bindEvents() {
     state.selectedLanguage = lang;
     const phoneEngine = document.getElementById('phone-tts-engine');
     if (phoneEngine) languageEngineSync.syncFromLanguage(lang, phoneEngine);
-    toast.info(`Dialer language set to: ${lang}`);
+    if (typeof voicePrewarmManager !== 'undefined') {
+      voicePrewarmManager.invalidate('Language changed — click Re-Warm before dialing.');
+    }
+    toast.info(`Dialer language set to ${lang} — click Re-Warm Voice before calling.`);
   });
 
   document.getElementById('twilio-voice-select')?.addEventListener('change', (e) => {
@@ -3416,41 +3555,24 @@ function bindEvents() {
     if (c && phoneInp) {
       phoneInp.value = c.phone_number || '';
     }
+    if (typeof voicePrewarmManager !== 'undefined') {
+      voicePrewarmManager.invalidate('Contact changed — click Re-Warm before dialing.');
+    }
   });
 
   // ── Simulator TTS Engine Selector ──
   document.getElementById('sim-tts-engine')?.addEventListener('change', (e) => {
     const opt = e.target.selectedOptions ? e.target.selectedOptions[0] : null;
     const voiceId = opt ? opt.dataset.voiceId : null;
-    const val = e.target.value;
-    const badge = document.getElementById('sim-tts-badge');
-    const modelTag = document.getElementById('sim-model-tag');
-    const prevBtn = document.getElementById('btn-sim-preview-prewarm');
-    const chosenVoice = (voiceId && typeof voicesManager !== 'undefined')
-      ? (voicesManager.voices || []).find(v => String(v.id) === String(voiceId))
-      : null;
-
-    if (badge) badge.textContent = `${val.toUpperCase()} Active`;
-    if (modelTag) {
-      const displayName = chosenVoice?.name?.split('(')?.[0]?.trim() || (val === 'f5tts' ? 'F5-TTS' : val === 'luxtts' ? 'LuxTTS' : val.includes('kannada') ? 'Sapna (Kannada)' : val.includes('hindi') ? 'Swara (Hindi)' : val.toUpperCase());
-      modelTag.innerHTML = `<i data-lucide="cpu"></i> Groq LLaMA / ${escapeHtml(displayName)}`;
-      lucide.createIcons({ nodes: [modelTag] });
-    }
-    if (prevBtn && chosenVoice) {
-      prevBtn.dataset.voiceId = String(chosenVoice.id || '');
-      if (chosenVoice.preview_url) {
-        prevBtn.dataset.url = chosenVoice.preview_url;
-        prevBtn.style.display = 'inline-flex';
-      }
-    }
-
-    if (voiceId) {
-      voicesManager.activate(voiceId);
-    } else {
-      toast.info(`Voice engine set to: ${val.toUpperCase()}`);
+    if (voiceId && typeof voicesManager !== 'undefined') {
+      voicesManager._preferredVoiceId = String(voiceId);
     }
     const simLang = document.getElementById('sim-language');
     if (simLang) languageEngineSync.syncFromEngine(e.target.value, simLang);
+    if (typeof simPrewarm !== 'undefined') {
+      simPrewarm.invalidate('Voice changed — click Re-Warm before Start Call.');
+      toast.info(`Selected ${simPrewarm.getPersonaName()} — click Re-Warm Voice before Start Call.`);
+    }
   });
 
   document.getElementById('btn-toggle-twilio-token')?.addEventListener('click', () => {
@@ -3492,20 +3614,23 @@ function bindEvents() {
         const phoneLang = document.getElementById('phone-call-language');
         if (phoneLang) phoneLang.value = contact.preferred_language;
 
-        // Auto-switch voice for simulator if user is on default
         const simSel = document.getElementById('sim-tts-engine');
-        if (simSel) {
-          if (contact.preferred_language === 'kn-IN' && ['f5tts', 'luxtts'].includes(simSel.value)) {
-            simSel.value = 'kannada_female';
-          } else if (contact.preferred_language === 'hi-IN' && ['f5tts', 'luxtts'].includes(simSel.value)) {
-            simSel.value = 'hindi_female';
-          }
+        if (simSel && typeof languageEngineSync !== 'undefined') {
+          languageEngineSync.syncFromLanguage(contact.preferred_language, simSel);
         }
       }
+    }
+    if (typeof simPrewarm !== 'undefined') {
+      simPrewarm.invalidate('Contact changed — click Re-Warm before Start Call.');
     }
   };
   document.getElementById('contact-select')?.addEventListener('change', e => syncContactPhone(e.target.value));
   document.getElementById('contact-select-mkt')?.addEventListener('change', e => syncContactPhone(e.target.value));
+  document.getElementById('phone-input-inbound')?.addEventListener('input', () => {
+    if (state.callMode === 'inbound' && typeof simPrewarm !== 'undefined') {
+      simPrewarm.invalidate('Caller number changed — click Re-Warm before Start Call.');
+    }
+  });
 
   // ── Simulator Language Selector ──
   document.getElementById('sim-language')?.addEventListener('change', (e) => {
@@ -3521,7 +3646,10 @@ function bindEvents() {
     if (state.recognition) {
       state.recognition.lang = lang;
     }
-    toast.success(`Simulator language set to: ${lang}`);
+    if (typeof simPrewarm !== 'undefined') {
+      simPrewarm.invalidate('Language changed — click Re-Warm before Start Call.');
+    }
+    toast.info(`Simulator language set to ${lang} — click Re-Warm Voice before calling.`);
   });
 
   // ── Settings Default Language ──
@@ -3605,6 +3733,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   } catch (syncInitErr) {
     console.warn('[Sync Init Error]', syncInitErr);
+  }
+
+  if (typeof simPrewarm !== 'undefined') {
+    simPrewarm.invalidate('Click Re-Warm Voice before starting a simulated call.');
+  }
+  if (typeof voicePrewarmManager !== 'undefined') {
+    voicePrewarmManager.invalidate('Click Re-Warm Voice before placing a real phone call.');
   }
 
   ui.showSection('dashboard');

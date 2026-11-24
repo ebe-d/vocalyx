@@ -168,7 +168,7 @@ def resolve_base_url(request_base: str = None) -> str:
     return "https://ebedsouza-vocalyx.hf.space"
 
 
-def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: str = "outbound", base_url: str = None, voice_engine: Optional[str] = None, language: Optional[str] = None) -> Dict[str, Any]:
+def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: str = "outbound", base_url: str = None, voice_engine: Optional[str] = None, language: Optional[str] = None, voice_id: Optional[int] = None, reference_audio: Optional[str] = None, persona_name: Optional[str] = None) -> Dict[str, Any]:
     if not is_configured():
         raise RuntimeError("Twilio is not configured. Please enter your Account SID, Auth Token, and Phone Number in Settings.")
 
@@ -226,6 +226,7 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
         raise RuntimeError(f"Twilio call failed: {err_msg}") from call_err
 
     active_engine = (voice_engine or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")).lower()
+    active_persona = (persona_name or ("Joanna" if "joanna" in active_engine else "Matthew" if "matthew" in active_engine else "Sapna" if "kannada_female" in active_engine else "Gagan" if "kannada_male" in active_engine else "Swara" if "hindi_female" in active_engine else "Madhur" if "hindi_male" in active_engine else "Alex")).strip() or "Alex"
 
     active_calls[call.sid] = {
         "call_sid": call.sid,
@@ -237,6 +238,9 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
         "start_time": time.time(),
         "status": call.status,
         "voice_engine": active_engine,
+        "voice_id": voice_id,
+        "reference_audio": reference_audio,
+        "persona_name": active_persona,
         "language": language or "en-US",
     }
 
@@ -265,26 +269,24 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
             # If contact has generic name and prewarmed exists, no further greeting generation needed
             if cname == "there" and has_prewarmed:
                 print(f"[Twilio Pre-Gen] Generic greeting already warm for {to_formatted}. Zero latency guaranteed.")
-            else:
+            elif not has_prewarmed:
                 if mode == "marketing":
-                    g_text = f"Hi {cname}! This is Alex calling from Vocalyx with an exciting update for you. Do you have a quick minute?"
+                    g_text = f"Hi {cname}! This is {active_persona} calling from Vocalyx with an exciting update for you. Do you have a quick minute?"
                 else:
-                    g_text = f"Hello {cname}! This is Alex calling from Vocalyx. How are you doing today?"
+                    g_text = f"Hello {cname}! This is {active_persona} calling from Vocalyx. How are you doing today?"
 
-                print(f"[Twilio Pre-Gen] Generating {active_engine} greeting for {cname}...")
-                w_path = tts_engine.synthesize(g_text, engine=active_engine)
+                print(f"[Twilio Pre-Gen] Generating {active_engine} ({active_persona}) greeting for {cname}...")
+                w_path = tts_engine.synthesize(g_text, reference_audio=reference_audio, engine=active_engine)
                 if w_path and os.path.exists(w_path):
                     pregenerated_audio[call.sid] = w_path
                     if contact_id:
                         pregenerated_audio[str(contact_id)] = w_path
                     pregenerated_audio[to_formatted] = w_path
-                    # Also keep as prewarmed backup
-                    if not has_prewarmed:
-                        try:
-                            import shutil
-                            shutil.copy2(w_path, prewarmed_file)
-                        except Exception:
-                            pass
+                    try:
+                        import shutil
+                        shutil.copy2(w_path, prewarmed_file)
+                    except Exception:
+                        pass
                     print(f"[Twilio Pre-Gen] ✓ {active_engine} greeting ready for {call.sid}: {os.path.basename(w_path)}")
         except Exception as pe:
             print(f"[Twilio Pre-Gen Note]: {pe}")
@@ -311,7 +313,7 @@ def end_call(call_sid: str) -> Dict[str, Any]:
         raise RuntimeError(f"Failed to end Twilio call {call_sid}: {exc}") from exc
 
 
-def build_twiml(text: str, call_sid: str, base_url: str, wav_path: Optional[str] = None, is_greeting: bool = False, is_final: bool = False, voice_engine: str = None) -> str:
+def build_twiml(text: str, call_sid: str, base_url: str, wav_path: Optional[str] = None, is_greeting: bool = False, is_final: bool = False, voice_engine: str = None, reference_audio: Optional[str] = None) -> str:
     """
     Build TwiML XML that:
     1. Plays speech using Cloned Voice (F5-TTS, LuxTTS, Chatterbox Turbo) via <Play>,
@@ -374,8 +376,9 @@ def build_twiml(text: str, call_sid: str, base_url: str, wav_path: Optional[str]
                 tts_mod = sys.modules.get("backend.tts_engine")
                 if tts_mod is None or not hasattr(tts_mod, "synthesize"):
                     from backend import tts_engine as tts_mod
-                print(f"[Twilio TwiML] Synthesizing cloned voice response ({engine}) for: '{text[:50]}...'")
-                chosen_wav = tts_mod.synthesize(text, engine=engine)
+                ref_audio = reference_audio or call_info.get("reference_audio")
+                print(f"[Twilio TwiML] Synthesizing cloned voice response ({engine}, ref={ref_audio or 'default'}) for: '{text[:50]}...'")
+                chosen_wav = tts_mod.synthesize(text, reference_audio=ref_audio, engine=engine)
             except Exception as tts_err:
                 print(f"[Twilio TwiML] Cloned voice dynamic synthesis error: {tts_err}")
 

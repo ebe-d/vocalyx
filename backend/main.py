@@ -150,6 +150,7 @@ class TwilioCallRequest(BaseModel):
     mode: Optional[str] = "outbound"
     public_url: Optional[str] = None
     voice_engine: Optional[str] = None
+    voice_id: Optional[int] = None
     language: Optional[str] = None
 
 
@@ -424,31 +425,23 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     target_lang = request.language or contact_memory.get("preferred_language") or "en-US"
 
-    response_text = llm_engine.get_chat_response(
-        user_message=message,
-        rag_context=rag_context,
-        contact_memory=contact_memory,
-        conversation_history=request.conversation_history,
-        previous_calls=previous_calls_data,
-        script_content=script_content,
-        language=target_lang,
-    )
-
-    # Determine active voice and reference audio
+    # Determine active voice, reference audio, and persona BEFORE LLM response
     voice_engine = request.tts_engine
+    selected_voice_obj = None
     ref_audio = None
     if request.voice_id:
-        selected_voice = db.query(models.Voice).filter(models.Voice.id == request.voice_id).first()
-        if selected_voice:
-            voice_engine = selected_voice.engine
-            ref_audio = selected_voice.audio_path
+        selected_voice_obj = db.query(models.Voice).filter(models.Voice.id == request.voice_id).first()
     elif not voice_engine:
-        active_voice = db.query(models.Voice).filter(models.Voice.is_active == True).first()
-        if active_voice:
-            voice_engine = active_voice.engine
-            ref_audio = active_voice.audio_path
+        selected_voice_obj = db.query(models.Voice).filter(models.Voice.is_active == True).first()
+    else:
+        selected_voice_obj = db.query(models.Voice).filter(models.Voice.engine == voice_engine, models.Voice.is_active == True).first() \
+            or db.query(models.Voice).filter(models.Voice.engine == voice_engine).first()
 
-    # Auto-route to native studio edge-tts for non-English languages if standard English cloned engine is set
+    if selected_voice_obj:
+        voice_engine = voice_engine or selected_voice_obj.engine
+        ref_audio = selected_voice_obj.audio_path
+
+    # Auto-route to native studio edge-tts for non-English languages
     if target_lang in ("kn-IN", "kn"):
         if "male" in (voice_engine or "").lower() and "female" not in (voice_engine or "").lower():
             voice_engine = "kannada_male"
@@ -459,6 +452,19 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             voice_engine = "hindi_male"
         else:
             voice_engine = "hindi_female"
+
+    persona_name = _get_voice_persona_name(selected_voice_obj if not target_lang in ("kn-IN", "kn", "hi-IN", "hi") else None, voice_engine)
+
+    response_text = llm_engine.get_chat_response(
+        user_message=message,
+        rag_context=rag_context,
+        contact_memory=contact_memory,
+        conversation_history=request.conversation_history,
+        previous_calls=previous_calls_data,
+        script_content=script_content,
+        language=target_lang,
+        agent_name=persona_name,
+    )
 
     audio_url = None
     tts_error = None
@@ -499,23 +505,73 @@ async def synthesize_text(request: TTSRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {exc}")
 
 
+def _get_voice_persona_name(voice_obj=None, engine: Optional[str] = None) -> str:
+    """Resolve spoken persona name for the selected voice (e.g. Lawrence, Alex, Joanna, Sapna)."""
+    if voice_obj and getattr(voice_obj, "name", None):
+        short = voice_obj.name.split("(")[0].strip()
+        if short:
+            return short
+    eng = (engine or "").lower()
+    if "joanna" in eng or eng == "polly_female":
+        return "Joanna"
+    if "matthew" in eng or eng in ("polly", "polly_matthew"):
+        return "Matthew"
+    if eng == "kannada_female":
+        return "Sapna"
+    if eng == "kannada_male":
+        return "Gagan"
+    if eng == "hindi_female":
+        return "Swara"
+    if eng == "hindi_male":
+        return "Madhur"
+    return "Alex"
+
+
+def _build_greeting_text(persona_name: str = "Alex", contact_name: str = "there", language: str = "en-US", mode: str = "outbound") -> str:
+    """Build synchronized greeting text used identically in chat UI, pre-warm audio, and Twilio calls."""
+    persona = (persona_name or "Alex").strip() or "Alex"
+    cname = (contact_name or "").strip() or "there"
+    lang = (language or "en-US").strip()
+    m = (mode or "outbound").strip().lower()
+
+    if lang in ("kn-IN", "kn"):
+        kn_name = cname if cname != "there" else "ಸ್ನೇಹಿತರೆ"
+        if m == "inbound":
+            return (
+                f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ, ನಾನು {persona}. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?"
+                if cname != "there"
+                else f"ನಮಸ್ಕಾರ, ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ! ನನ್ನ ಹೆಸರು {persona}. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಲ್ಲೆನು?"
+            )
+        if m == "marketing":
+            return f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ {persona} ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಒಂದು ನಿಮಿಷ ಸಮಯವಿದೆಯೇ?"
+        return f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ {persona} ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಹೇಗಿದ್ದೀರಾ?"
+
+    if lang in ("hi-IN", "hi"):
+        hi_name = cname if cname != "there" else "जी"
+        if m == "inbound":
+            return (
+                f"नमस्ते {hi_name}! वोकलिक्स में आपका स्वागत है, मैं {persona} बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?"
+                if cname != "there"
+                else f"नमस्ते, वोकलिक्स में आपका स्वागत है! मेरा नाम {persona} है। मैं आपकी क्या मदद कर सकता हूँ?"
+            )
+        if m == "marketing":
+            return f"नमस्ते {hi_name}! वोकलिक्स से {persona} बोल रहा हूँ। क्या आपके पास एक मिनट का समय है?"
+        return f"नमस्ते {hi_name}! वोकलिक्स से {persona} बोल रहा हूँ। आप कैसे हैं?"
+
+    if m == "inbound":
+        if cname != "there":
+            return f"Hello {cname}! Thank you for calling Vocalyx, this is {persona}. How can I help you today?"
+        return f"Hello, thank you for calling Vocalyx! My name is {persona}. How may I assist you today?"
+    if m == "marketing":
+        return f"Hi {cname}! This is {persona} calling from Vocalyx with an exciting update for you. Do you have a quick minute?"
+    return f"Hello {cname}! This is {persona} calling from Vocalyx. How are you doing today?"
+
+
 def _sync_active_voice_audio(audio_path: Optional[str]):
-    """Copy selected custom voice reference across runtime paths and clear stale caches."""
+    """Point runtime reference path to the selected voice WITHOUT overwriting immutable Alex/voice_clone files."""
     from backend import tts_engine
     if audio_path and os.path.exists(audio_path):
         config.REFERENCE_AUDIO_PATH = audio_path
-        targets = [
-            "voice_clone.mp3",
-            os.path.join(os.path.dirname(__file__), "voice_clone.mp3"),
-        ]
-        if os.path.isdir("/kaggle/working"):
-            targets.append("/kaggle/working/voice_clone.mp3")
-        for target in targets:
-            if os.path.abspath(audio_path) != os.path.abspath(target):
-                try:
-                    shutil.copyfile(audio_path, target)
-                except Exception:
-                    pass
     tts_engine._cached_lux_prompt = None
     tts_engine._cached_chatterbox_ref = None
     for cf in ["voice_clone_lux_conds.pt", "voice_clone_conds.pt", "prewarmed_greeting.wav", "prewarmed_reprompt.wav", "prewarmed_goodbye.wav"]:
@@ -554,22 +610,27 @@ class TTSPrewarmRequest(BaseModel):
 @app.post("/api/tts/prewarm")
 async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
     """
-    Pre-warms the voice cloning engine:
-    1. Loads the selected TTS weights into GPU memory.
-    2. Computes and caches reference audio voice conditioning.
-    3. Synthesizes and writes prewarmed_greeting.wav to disk.
-    Ensures subsequent Twilio calls connect with 0.0s latency.
+    Pre-warms the selected voice, syncs its exact audio reference, and generates a
+    personalized greeting wav + exact greeting_text so browser chat, audio, and Twilio match.
     """
     import time
     t0 = time.time()
     from backend import tts_engine, config
     req_engine = request.query_params.get("engine")
     req_voice_id = request.query_params.get("voice_id")
+    req_lang = request.query_params.get("language") or "en-US"
+    req_contact_id = request.query_params.get("contact_id")
+    req_contact_name = request.query_params.get("contact_name")
+    req_mode = request.query_params.get("mode") or "outbound"
     try:
         body = await request.json()
         if isinstance(body, dict):
             req_engine = req_engine or body.get("engine")
             req_voice_id = req_voice_id or body.get("voice_id")
+            req_lang = body.get("language") or req_lang
+            req_contact_id = req_contact_id or body.get("contact_id")
+            req_contact_name = req_contact_name or body.get("contact_name")
+            req_mode = body.get("mode") or req_mode
     except Exception:
         pass
 
@@ -579,80 +640,67 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
             selected_voice = db.query(models.Voice).filter(models.Voice.id == int(req_voice_id)).first()
         except Exception:
             selected_voice = None
+    if not selected_voice and req_engine:
+        selected_voice = db.query(models.Voice).filter(models.Voice.engine == req_engine.lower(), models.Voice.is_active == True).first() \
+            or db.query(models.Voice).filter(models.Voice.engine == req_engine.lower()).first()
     if not selected_voice:
         selected_voice = db.query(models.Voice).filter(models.Voice.is_active == True).first()
 
+    # Keep DB active voice synced when pre-warming a specific voice row
+    if selected_voice and not selected_voice.is_active:
+        db.query(models.Voice).update({models.Voice.is_active: False})
+        selected_voice.is_active = True
+        db.commit()
+
     active_engine = (req_engine or (selected_voice.engine if selected_voice else None) or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")).lower()
+    if req_lang in ("kn-IN", "kn"):
+        active_engine = "kannada_male" if ("male" in active_engine and "female" not in active_engine) else "kannada_female"
+    elif req_lang in ("hi-IN", "hi"):
+        active_engine = "hindi_male" if ("male" in active_engine and "female" not in active_engine) else "hindi_female"
 
-    indic_studio_profiles = {
-        "kannada_female": ("sapna_greeting.wav", "kn-IN-SapnaNeural", "ನಮಸ್ಕಾರ, ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ! ನನ್ನ ಹೆಸರು ಸ್ವಪ್ನಾ.", "Sapna (Kannada Female Studio)"),
-        "kannada_male": ("gagan_greeting.wav", "kn-IN-GaganNeural", "ನಮಸ್ಕಾರ, ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ! ನನ್ನ ಹೆಸರು ಗಗನ್.", "Gagan (Kannada Male Studio)"),
-        "hindi_female": ("swara_greeting.wav", "hi-IN-SwaraNeural", "नमस्ते, वोकलिक्स में आपका स्वागत है! मेरा नाम स्वरा है।", "Swara (Hindi Female Studio)"),
-        "hindi_male": ("madhur_greeting.wav", "hi-IN-MadhurNeural", "नमस्ते, वोकलिक्स में आपका स्वागत है! मेरा नाम मधुर है।", "Madhur (Hindi Male Studio)"),
-    }
-    if active_engine in indic_studio_profiles:
-        fname, _voice_id, sample_text, label = indic_studio_profiles[active_engine]
-        studio_path = os.path.join(TTS_OUTPUT_DIR, fname)
-        if not os.path.exists(studio_path):
-            fallback_src = os.path.join("default_voices", fname)
-            if os.path.exists(fallback_src):
-                shutil.copy2(fallback_src, studio_path)
-            else:
-                gen_path = tts_engine.synthesize(sample_text, engine=active_engine)
-                if gen_path and os.path.exists(gen_path):
-                    shutil.copy2(gen_path, studio_path)
-        if os.path.exists(studio_path):
-            shutil.copy2(studio_path, os.path.join(TTS_OUTPUT_DIR, "prewarmed_greeting.wav"))
-        return {
-            "success": True,
-            "ready": True,
-            "greeting_url": f"/tts_output/{fname}",
-            "elapsed_seconds": 0.1,
-            "message": f"{label} voice profile is ready with 0.0s latency.",
-        }
+    contact_name = (req_contact_name or "").strip()
+    if not contact_name and req_contact_id:
+        try:
+            c_obj = db.query(models.Contact).filter(models.Contact.id == int(req_contact_id)).first()
+            if c_obj:
+                contact_name = c_obj.name
+        except Exception:
+            pass
+    if not contact_name:
+        contact_name = "there"
 
-    if "joanna" in active_engine or active_engine == "polly_female":
-        joanna_path = os.path.join(TTS_OUTPUT_DIR, "joanna_greeting.wav")
-        if not os.path.exists(joanna_path):
-            tts_engine.synthesize("Hello, thank you for calling Vocalyx! My name is Joanna. How may I assist you today?", engine="polly_joanna")
-        shutil.copy2(joanna_path if os.path.exists(joanna_path) else os.path.join("default_voices", "joanna_greeting.wav"), os.path.join(TTS_OUTPUT_DIR, "prewarmed_greeting.wav"))
-        return {
-            "success": True,
-            "ready": True,
-            "greeting_url": "/tts_output/joanna_greeting.wav",
-            "elapsed_seconds": 0.1,
-            "message": "Joanna (Natural US Female) voice profile is ready with 0.0s latency.",
-        }
-
-    if any(k in active_engine for k in ["matthew", "polly_matthew"]) or active_engine == "polly":
-        matthew_path = os.path.join(TTS_OUTPUT_DIR, "matthew_greeting.wav")
-        if not os.path.exists(matthew_path):
-            tts_engine.synthesize("Hello there, thank you for calling Vocalyx. This is Matthew speaking. How can I help you today?", engine="polly_matthew")
-        shutil.copy2(matthew_path if os.path.exists(matthew_path) else os.path.join("default_voices", "matthew_greeting.wav"), os.path.join(TTS_OUTPUT_DIR, "prewarmed_greeting.wav"))
-        return {
-            "success": True,
-            "ready": True,
-            "greeting_url": "/tts_output/matthew_greeting.wav",
-            "elapsed_seconds": 0.1,
-            "message": "Matthew (Natural US Male) voice profile is ready with 0.0s latency.",
-        }
+    persona_name = _get_voice_persona_name(
+        selected_voice if req_lang not in ("kn-IN", "kn", "hi-IN", "hi") else None,
+        active_engine,
+    )
+    greeting_text = _build_greeting_text(
+        persona_name=persona_name,
+        contact_name=contact_name,
+        language=req_lang,
+        mode=req_mode,
+    )
 
     try:
         ref_audio = None
         if selected_voice and selected_voice.voice_type == "cloned" and selected_voice.audio_path and os.path.exists(selected_voice.audio_path):
             ref_audio = selected_voice.audio_path
-            _sync_active_voice_audio(ref_audio)
-        greeting_text = "Hello there! This is Alex calling from Vocalyx. How are you doing today?"
+        _sync_active_voice_audio(ref_audio)
+        config.TWILIO_VOICE_ENGINE = active_engine
+
         wav_path = tts_engine.prewarm_engine(greeting_text, engine=active_engine, reference_audio=ref_audio)
         elapsed = time.time() - t0
         return {
             "success": True,
             "ready": True,
             "greeting_url": "/tts_output/prewarmed_greeting.wav",
+            "greeting_text": greeting_text,
             "voice_id": selected_voice.id if selected_voice else None,
-            "voice_name": selected_voice.name if selected_voice else None,
+            "voice_name": selected_voice.name if selected_voice else persona_name,
+            "persona_name": persona_name,
+            "language": req_lang,
+            "mode": req_mode,
             "elapsed_seconds": round(elapsed, 2),
-            "message": f"Cloned voice ({selected_voice.name if selected_voice else active_engine}) pre-warmed in {elapsed:.1f}s. Audio is ready on server.",
+            "message": f"Voice ({persona_name} — {active_engine.upper()}) pre-warmed in {elapsed:.1f}s and ready.",
         }
     except Exception as exc:
         print(f"[TTS ERROR] /api/tts/prewarm failed: {exc}")
@@ -766,12 +814,13 @@ async def clone_voice(
 # ---------------------------------------------------------------------------
 
 def seed_default_voices_if_needed(db: Session):
+    alex_ref = "default_voices/alex_reference.mp3" if os.path.exists("default_voices/alex_reference.mp3") else "voice_clone.mp3"
     defaults = [
         models.Voice(
             name="Alex (Default F5-TTS Flow-Matching)",
             engine="f5tts",
             voice_type="cloned",
-            audio_path="voice_clone.mp3",
+            audio_path=alex_ref,
             preview_url="/tts_output/prewarmed_greeting.wav",
             is_active=True,
         ),
@@ -827,7 +876,7 @@ def seed_default_voices_if_needed(db: Session):
             name="Alex (LuxTTS Ultra-Fast 150x)",
             engine="luxtts",
             voice_type="cloned",
-            audio_path="voice_clone.mp3",
+            audio_path=alex_ref,
             preview_url="/tts_output/prewarmed_greeting.wav",
             is_active=False,
         ),
@@ -853,9 +902,12 @@ def seed_default_voices_if_needed(db: Session):
                 if not v.name or "kannada" in d.engine or "hindi" in d.engine:
                     v.name = d.name
                     v.voice_type = d.voice_type
-        # Ensure Joanna and Matthew have audio references (match by specific name, NOT generic "female")
+        # Ensure Alex defaults use immutable alex_reference.mp3 & Joanna/Matthew keep audio references
         for v in existing:
-            if "joanna" in v.name.lower() or "natural us female" in v.name.lower():
+            if "alex" in (v.name or "").lower() and v.engine in ("f5tts", "luxtts"):
+                if os.path.exists("default_voices/alex_reference.mp3"):
+                    v.audio_path = "default_voices/alex_reference.mp3"
+            elif "joanna" in v.name.lower() or "natural us female" in v.name.lower():
                 v.engine = "polly_joanna"
                 v.preview_url = "/tts_output/joanna_greeting.wav"
                 v.audio_path = "default_voices/female_reference.wav"
@@ -1381,6 +1433,16 @@ def initiate_phone_call(call_req: TwilioCallRequest, request: Request, db: Sessi
     if base_url and not any(h in base_url for h in ["0.0.0.0", "127.0.0.1", "localhost"]):
         config.PUBLIC_BASE_URL = base_url.rstrip("/")
         twilio_service._persist_config()
+
+    selected_voice = None
+    if call_req.voice_id:
+        selected_voice = db.query(models.Voice).filter(models.Voice.id == int(call_req.voice_id)).first()
+    if not selected_voice and call_req.voice_engine:
+        selected_voice = db.query(models.Voice).filter(models.Voice.engine == call_req.voice_engine.strip().lower(), models.Voice.is_active == True).first() \
+            or db.query(models.Voice).filter(models.Voice.engine == call_req.voice_engine.strip().lower()).first()
+    if not selected_voice:
+        selected_voice = db.query(models.Voice).filter(models.Voice.is_active == True).first()
+
     if call_req.voice_engine:
         config.TWILIO_VOICE_ENGINE = call_req.voice_engine.strip().lower()
         os.environ["TWILIO_VOICE_ENGINE"] = config.TWILIO_VOICE_ENGINE
@@ -1395,14 +1457,29 @@ def initiate_phone_call(call_req: TwilioCallRequest, request: Request, db: Sessi
         except Exception:
             pass
 
+    eff_engine = (call_req.voice_engine or (selected_voice.engine if selected_voice else None) or config.TWILIO_VOICE_ENGINE or "f5tts").strip().lower()
+    if call_lang in ("kn-IN", "kn"):
+        eff_engine = "kannada_male" if ("male" in eff_engine and "female" not in eff_engine) else "kannada_female"
+    elif call_lang in ("hi-IN", "hi"):
+        eff_engine = "hindi_male" if ("male" in eff_engine and "female" not in eff_engine) else "hindi_female"
+
+    ref_audio = selected_voice.audio_path if selected_voice and selected_voice.voice_type == "cloned" and selected_voice.audio_path and os.path.exists(selected_voice.audio_path) else None
+    persona_name = _get_voice_persona_name(
+        selected_voice if (call_lang or "en-US") not in ("kn-IN", "kn", "hi-IN", "hi") else None,
+        eff_engine,
+    )
+
     try:
         res = twilio_service.make_outbound_call(
             to_number=call_req.to_number,
             contact_id=call_req.contact_id,
             mode=call_req.mode or "outbound",
             base_url=base_url,
-            voice_engine=call_req.voice_engine,
+            voice_engine=eff_engine,
             language=call_lang,
+            voice_id=selected_voice.id if selected_voice else call_req.voice_id,
+            reference_audio=ref_audio,
+            persona_name=persona_name,
         )
         return res
     except Exception as exc:
@@ -1551,23 +1628,28 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
         lang_param = request.query_params.get("lang")
         call_lang = lang_param or (getattr(contact, "preferred_language", "en-US") if contact else "en-US") or "en-US"
 
-        # Determine initial greeting
-        if call_lang in ("kn-IN", "kn"):
-            greeting = f"ನಮಸ್ಕಾರ {contact_name}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ ಅಲೆಕ್ಸ್ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಹೇಗಿದ್ದೀರಾ?"
-        elif call_lang in ("hi-IN", "hi"):
-            greeting = f"नमस्ते {contact_name}! वोकलिक्स से एलेक्स बोल रहा हूँ। आप कैसे हैं?"
-        elif mode == "marketing":
-            greeting = f"Hi {contact_name}! This is Alex calling from Vocalyx with an exciting update for you. Do you have a quick minute?"
-        elif mode == "inbound":
-            greeting = f"Hello {contact_name}! Thank you for calling Vocalyx, this is Alex. How can I help you today?" if contact else "Hello, thank you for calling Vocalyx! My name is Alex. How may I assist you today?"
-        else:
-            greeting = f"Hello {contact_name}! This is Alex calling from Vocalyx. How are you doing today?"
+        existing_call = twilio_service.active_calls.get(call_sid, {})
+        active_voice_db = db.query(models.Voice).filter(models.Voice.is_active == True).first()
+        call_engine = existing_call.get("voice_engine") or (active_voice_db.engine if active_voice_db else None) or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")
+        call_ref_audio = existing_call.get("reference_audio") or (active_voice_db.audio_path if active_voice_db and active_voice_db.voice_type == "cloned" else None)
 
-        call_engine = twilio_service.active_calls.get(call_sid, {}).get("voice_engine") or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")
         if call_lang in ("kn-IN", "kn"):
-            call_engine = "kannada_female"
+            call_engine = "kannada_male" if ("male" in (call_engine or "").lower() and "female" not in (call_engine or "").lower()) else "kannada_female"
         elif call_lang in ("hi-IN", "hi"):
-            call_engine = "hindi_female"
+            call_engine = "hindi_male" if ("male" in (call_engine or "").lower() and "female" not in (call_engine or "").lower()) else "hindi_female"
+
+        persona_name = existing_call.get("persona_name") or _get_voice_persona_name(
+            active_voice_db if call_lang not in ("kn-IN", "kn", "hi-IN", "hi") else None,
+            call_engine,
+        )
+
+        # Synchronized initial greeting using selected persona & language
+        greeting = _build_greeting_text(
+            persona_name=persona_name,
+            contact_name=contact_name,
+            language=call_lang,
+            mode=mode,
+        )
 
         # Track in active calls
         if call_sid not in twilio_service.active_calls:
@@ -1582,15 +1664,19 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
                 "start_time": time.time(),
                 "status": "in-progress",
                 "voice_engine": call_engine,
+                "reference_audio": call_ref_audio,
+                "persona_name": persona_name,
                 "language": call_lang,
             }
         else:
             twilio_service.active_calls[call_sid]["transcript"].append({"role": "agent", "text": greeting})
             twilio_service.active_calls[call_sid]["status"] = "in-progress"
             twilio_service.active_calls[call_sid]["voice_engine"] = call_engine
+            twilio_service.active_calls[call_sid]["reference_audio"] = call_ref_audio
+            twilio_service.active_calls[call_sid]["persona_name"] = persona_name
             twilio_service.active_calls[call_sid]["language"] = call_lang
 
-        twiml_xml = twilio_service.build_twiml(greeting, call_sid, base_url, is_greeting=True, voice_engine=call_engine)
+        twiml_xml = twilio_service.build_twiml(greeting, call_sid, base_url, is_greeting=True, voice_engine=call_engine, reference_audio=call_ref_audio)
         return Response(content=twiml_xml, media_type="application/xml")
     except Exception as exc:
         print(f"[Twilio Voice Webhook Fallback]: {exc}")
@@ -1701,11 +1787,14 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
 
         call_lang = call_state.get("language") or getattr(contact, "preferred_language", "en-US") or "en-US"
         if call_lang in ("kn-IN", "kn"):
-            call_engine = "kannada_female"
-            call_state["voice_engine"] = "kannada_female"
+            call_engine = "kannada_male" if ("male" in (call_engine or "").lower() and "female" not in (call_engine or "").lower()) else "kannada_female"
+            call_state["voice_engine"] = call_engine
         elif call_lang in ("hi-IN", "hi"):
-            call_engine = "hindi_female"
-            call_state["voice_engine"] = "hindi_female"
+            call_engine = "hindi_male" if ("male" in (call_engine or "").lower() and "female" not in (call_engine or "").lower()) else "hindi_female"
+            call_state["voice_engine"] = call_engine
+
+        call_ref_audio = call_state.get("reference_audio")
+        call_persona = call_state.get("persona_name") or _get_voice_persona_name(None, call_engine)
 
         try:
             agent_reply = llm_engine.get_chat_response(
@@ -1715,12 +1804,13 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
                 conversation_history=call_state.get("transcript", []),
                 previous_calls=previous_calls_data,
                 language=call_lang,
+                agent_name=call_persona,
             )
         except Exception as llm_err:
             print(f"[LLM Note]: {llm_err}")
             agent_reply = "I understand. Let me check that and get right back to you on that."
 
-        print(f"[Twilio AI Reply] Call {call_sid}: '{agent_reply}'")
+        print(f"[Twilio AI Reply] Call {call_sid} ({call_persona}): '{agent_reply}'")
 
         # Record agent response
         call_state["transcript"].append({"role": "agent", "text": agent_reply})
@@ -1734,7 +1824,7 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
                 if tts_mod is None or not hasattr(tts_mod, "synthesize"):
                     from backend import tts_engine as tts_mod
                 wav_path = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: tts_mod.synthesize(agent_reply, engine=call_engine)),
+                    loop.run_in_executor(None, lambda: tts_mod.synthesize(agent_reply, reference_audio=call_ref_audio, engine=call_engine)),
                     timeout=15.0
                 )
             except asyncio.TimeoutError:
@@ -1745,7 +1835,7 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
                 wav_path = None
 
         # Build TwiML directly with the synthesized cloned audio or Polly speech:
-        twiml_xml = twilio_service.build_twiml(agent_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False, voice_engine=call_engine)
+        twiml_xml = twilio_service.build_twiml(agent_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False, voice_engine=call_engine, reference_audio=call_ref_audio)
         return Response(content=twiml_xml, media_type="application/xml")
         return Response(content=twiml_xml, media_type="application/xml")
     except Exception as exc:

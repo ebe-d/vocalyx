@@ -43,6 +43,7 @@ def get_chat_response(
     previous_calls: list = None,
     script_content: str = None,
     language: str = "en-US",
+    agent_name: str = "Alex",
 ) -> str:
     """
     Generate a conversational reply for an ongoing phone call or simulator session.
@@ -88,8 +89,9 @@ def get_chat_response(
     else:
         lang_instruction = ""
 
+    persona = (agent_name or "Alex").strip() or "Alex"
     system_parts = [
-        "You are Alex, a calm, articulate, and professional representative on a live telephone conversation. "
+        f"You are {persona}, a calm, articulate, and professional representative on a live telephone conversation. "
         "Never say or imply that you are an AI, a robot, an assistant, or a language model. "
         "Speak in a natural, polite, composed, and formal business tone. "
         "Do not use exclamation marks, hyperactive enthusiasm, sales hype, or casual slang. "
