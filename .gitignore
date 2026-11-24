@@ -1,0 +1,38 @@
+# Environment variables & local secrets (NEVER commit .env)
+.env
+.env.*
+!.env.example
+
+# Python caches & virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Local SQLite database & runtime settings
+*.db
+*.sqlite
+*.sqlite3
+alerts_settings.json
+backend/alerts_settings.json
+twilio_settings.json
+backend/twilio_settings.json
+
+# Generated archives & temporary uploads
+*.zip
+*.tar.gz
+backend/uploaded_docs/*
+!backend/uploaded_docs/.gitkeep
+uploaded_docs/*
+backend/uploaded_voices/
+uploaded_voices/
+
+# Generated runtime TTS outputs (studio default_voices/ & voice_clone.mp3 remain tracked)
+tts_output/
+backend/tts_output/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

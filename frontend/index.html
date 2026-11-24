@@ -1,0 +1,1561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vocalyx — AI Sales Voice Platform</title>
+
+  <!-- Google Fonts: Syne + Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ═══ TOAST CONTAINER ═══ -->
+  <div id="toast-container" aria-live="polite"></div>
+
+  <!-- ═══ BACKEND BANNER ═══ -->
+  <div class="backend-banner" id="backend-banner">
+    <i data-lucide="alert-triangle"></i>
+    <span>Backend disconnected. Verify your backend status in <strong>Settings</strong>.</span>
+    <button class="btn-banner-dismiss" onclick="document.getElementById('backend-banner').style.display='none'">✕</button>
+  </div>
+
+  <!-- ═══ APP SHELL ═══ -->
+  <div class="app-shell">
+
+    <!-- ── SIDEBAR ── -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark"><i data-lucide="mic"></i></div>
+        <span class="logo-text">Vocalyx</span>
+        <div class="logo-dot"></div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-section="dashboard">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" data-section="phone-call">
+          <i data-lucide="phone"></i>
+          <span>Phone Call</span>
+        </button>
+        <button class="nav-item" data-section="simulator">
+          <i data-lucide="mic"></i>
+          <span>Call Simulator</span>
+        </button>
+        <button class="nav-item" data-section="contacts">
+          <i data-lucide="users"></i>
+          <span>Contacts</span>
+        </button>
+        <button class="nav-item" data-section="knowledge">
+          <i data-lucide="book-open"></i>
+          <span>Knowledge Base</span>
+        </button>
+        <button class="nav-item" data-section="voices">
+          <i data-lucide="audio-waveform"></i>
+          <span>Voices</span>
+        </button>
+        <button class="nav-item" data-section="history">
+          <i data-lucide="clock"></i>
+          <span>Call History</span>
+        </button>
+        <button class="nav-item" data-section="scripts">
+          <i data-lucide="file-text"></i>
+          <span>Scripts</span>
+        </button>
+        <button class="nav-item" data-section="alerts">
+          <i data-lucide="bell-ring"></i>
+          <span>Message Alerts</span>
+        </button>
+        <div class="nav-divider"></div>
+        <button class="nav-item" data-section="settings">
+          <i data-lucide="settings-2"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="backend-status-pill" id="sidebar-status">
+          <div class="status-dot" id="status-dot"></div>
+          <span id="status-label">Not connected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── MAIN ── -->
+    <main class="main-content" id="main-content">
+
+      <!-- TOPBAR -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="menu-toggle" id="menu-toggle">
+            <i data-lucide="menu"></i>
+          </button>
+          <div class="breadcrumb-wrap">
+            <span class="breadcrumb-brand">Vocalyx</span>
+            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb" id="breadcrumb">Dashboard</span>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="topbar-pill">
+            <i data-lucide="zap"></i>
+            <span>AI Active</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 1 — DASHBOARD
+      ══════════════════════════════════════════ -->
+      <section id="section-dashboard" class="section active">
+        <div class="section-header">
+          <div>
+            <h1>Dashboard <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Your AI-powered sales performance at a glance</p>
+          </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-top">
+              <span class="stat-label">Total Calls</span>
+              <div class="stat-icon-wrap"><i data-lucide="phone"></i></div>
+            </div>
+            <div class="stat-value" id="stat-total-calls">—</div>
+            <div class="stat-trend">All time</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-top">
+              <span class="stat-label">Contacts</span>
+              <div class="stat-icon-wrap"><i data-lucide="users"></i></div>
+            </div>
+            <div class="stat-value" id="stat-total-contacts">—</div>
+            <div class="stat-trend">In database</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-top">
+              <span class="stat-label">Avg Lead Score</span>
+              <div class="stat-icon-wrap"><i data-lucide="trending-up"></i></div>
+            </div>
+            <div class="stat-value" id="stat-avg-lead-score">—</div>
+            <div class="stat-trend">Across all calls</div>
+          </div>
+          <div class="stat-card stat-card--accent">
+            <div class="stat-top">
+              <span class="stat-label">Hot Leads</span>
+              <div class="stat-icon-wrap"><i data-lucide="flame"></i></div>
+            </div>
+            <div class="stat-value" id="stat-hot-leads">—</div>
+            <div class="stat-trend">Score ≥ 70</div>
+          </div>
+        </div>
+
+        <!-- Tables -->
+        <div class="tables-row">
+          <div class="card table-card">
+            <div class="card-header">
+              <h2><i data-lucide="flame"></i> Recent Hot Leads</h2>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Contact</th><th>Score</th><th>Sentiment</th><th>Outcome</th><th>Date</th>
+                </tr></thead>
+                <tbody id="hot-leads-tbody">
+                  <tr><td colspan="5" class="empty-row"><div class="spinner"></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card table-card">
+            <div class="card-header">
+              <h2><i data-lucide="clock"></i> Recent Calls</h2>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Contact</th><th>Score</th><th>Sentiment</th><th>Outcome</th><th>Date</th>
+                </tr></thead>
+                <tbody id="recent-calls-tbody">
+                  <tr><td colspan="5" class="empty-row"><div class="spinner"></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 2 — REAL PHONE CALL (TWILIO)
+      ══════════════════════════════════════════ -->
+      <section id="section-phone-call" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Real Phone Call <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Call actual phone numbers worldwide via your connected Twilio line with AI & Cloned Voice</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-dark btn-sm" id="btn-quick-twilio-settings">
+              <i data-lucide="settings-2"></i> Twilio Settings
+            </button>
+          </div>
+        </div>
+
+        <!-- Phone Call Pipeline Bar -->
+        <div class="pipeline-bar" style="margin-bottom: 20px;">
+          <div class="pipeline-left">
+            <div class="voice-badge">
+              <span class="conn-dot" id="phone-twilio-conn-dot"></span>
+              <span id="phone-twilio-status-text">Checking Twilio line...</span>
+            </div>
+          </div>
+          <div class="pipeline-center">
+            <span id="phone-line-number" style="font-size:0.85rem; font-weight:600; color:var(--text);">Twilio Caller ID: Not Configured</span>
+          </div>
+          <div class="pipeline-right">
+            <span class="badge badge-lime" id="phone-voice-status-badge"><i data-lucide="zap"></i> Voice Pre-Warmed</span>
+          </div>
+        </div>
+
+        <div class="phone-call-layout">
+
+          <!-- Left: Dialer & Controls -->
+          <div class="card sim-controls">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px;">
+              <h3 style="margin:0;">Phone Dialer</h3>
+              <span class="badge badge-lime" id="twilio-sim-status">Active</span>
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:16px;">
+              Dial any external phone number to experience multi-turn AI voice telephony in real-time.
+            </p>
+
+            <div class="form-group" style="margin-bottom: 14px;">
+              <label for="phone-contact-select">Select Contact</label>
+              <select id="phone-contact-select" class="form-select">
+                <option value="">— Select contact to call —</option>
+              </select>
+              <div class="field-hint" style="font-size:0.7rem;">Auto-fills phone number and attaches call history</div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 14px;">
+              <label for="twilio-dial-number">Destination Phone Number</label>
+              <input type="tel" id="twilio-dial-number" class="form-input" placeholder="+1234567890" />
+              <div class="field-hint" style="font-size:0.7rem;">Include country code with '+' (e.g. +15550001234 or +91...)</div>
+            </div>
+
+            <!-- Telephony Call Language Selector -->
+            <div class="form-group" style="margin-bottom: 14px;">
+              <label for="phone-call-language" style="font-size:0.8rem; font-weight:700;">Call Language</label>
+              <select id="phone-call-language" class="form-select" style="font-size:0.85rem; width:100%;">
+                <option value="en-US" selected>English (US)</option>
+                <option value="en-IN">English (India)</option>
+                <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+                <option value="hi-IN">Hindi (हिंदी)</option>
+              </select>
+              <div class="field-hint" style="font-size:0.7rem;">Speech recognition (STT) and AI responses will match this language.</div>
+            </div>
+
+            <!-- Telephony Voice Engine Selector for Real Phone Calls -->
+            <div class="form-group" style="margin-bottom: 14px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <label for="phone-tts-engine" style="margin:0; font-size:0.8rem; font-weight:700;">Telephony Voice Engine</label>
+                <span class="badge badge-lime" id="phone-tts-badge" style="font-size:0.65rem; text-transform:none; padding:2px 8px;">F5-TTS (Flow-Matching)</span>
+              </div>
+              <select id="phone-tts-engine" class="form-select" style="font-size:0.85rem; width:100%;">
+                <option value="f5tts" selected>F5-TTS &mdash; Flow-Matching Diffusion Cloned Voice (Ultra-Realistic)</option>
+                <option value="luxtts">LuxTTS &mdash; 150x Diffusion Cloned Voice (Ultra-Fast ~0.2s)</option>
+                <option value="polly">Amazon Polly Matthew &mdash; Standard Twilio Telephony (Instant)</option>
+                <option value="kannada_female">Sapna &mdash; Kannada Female (Studio Neural)</option>
+                <option value="kannada_male">Gagan &mdash; Kannada Male (Studio Neural)</option>
+                <option value="hindi_female">Swara &mdash; Hindi Female (Studio Neural)</option>
+                <option value="hindi_male">Madhur &mdash; Hindi Male (Studio Neural)</option>
+              </select>
+              <div class="field-hint" style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;" id="phone-tts-engine-hint">
+                Alex will speak using F5-TTS cloned voice synthesized into GPU memory.
+              </div>
+            </div>
+
+            <button class="btn btn-lime btn-lg" id="btn-dial-twilio" style="width:100%; margin-bottom: 16px; justify-content:center;">
+              <i data-lucide="phone-outgoing"></i> Call Real Phone
+            </button>
+
+            <!-- Voice Pre-Warm Box -->
+            <div class="voice-prewarm-box" style="padding:12px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; margin-bottom: 14px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <span style="font-size:0.75rem; font-weight:700; display:flex; align-items:center; gap:5px;">
+                  <i data-lucide="zap" style="width:14px; height:14px; color:var(--color-lime, #c5f82a);"></i> Cloned Voice Engine
+                </span>
+                <span class="badge badge-grey" id="voice-prewarm-badge" style="font-size:0.7rem;">Checking...</span>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button class="btn btn-dark btn-sm" id="btn-prewarm-voice" style="flex:1; font-size:0.75rem; display:flex; align-items:center; justify-content:center; gap:6px;">
+                  <i data-lucide="zap"></i> <span id="btn-prewarm-label">Ready Cloned Voice</span>
+                </button>
+                <button class="btn btn-dark btn-sm" id="btn-preview-greeting" style="display:none; font-size:0.75rem;" title="Play pre-warmed greeting">
+                  <i data-lucide="volume-2"></i> Preview
+                </button>
+              </div>
+              <div id="voice-prewarm-hint" style="font-size:0.7rem; color:var(--text-muted); margin-top:6px; line-height:1.3;">
+                Pre-computes cloned voice weights into GPU memory for 0.00s initial greeting latency.
+              </div>
+            </div>
+
+            <!-- In-Progress Twilio Call Box -->
+            <div class="twilio-in-call-box" id="twilio-in-call-box" style="display:none; padding:12px; background:rgba(197, 248, 42, 0.05); border:1px solid var(--color-lime, #c5f82a); border-radius:8px;">
+              <div class="twilio-call-status-row" style="display:flex; align-items:center; gap:8px;">
+                <span class="conn-dot connected" id="twilio-active-dot"></span>
+                <span id="twilio-active-status" style="font-weight:700; font-size:0.85rem; color:var(--text);">Calling...</span>
+                <span class="twilio-active-timer" id="twilio-active-timer" style="margin-left:auto; font-family:monospace; font-weight:700; font-size:0.9rem; color:var(--color-lime,#c5f82a);">00:00</span>
+              </div>
+              <div class="twilio-active-target" id="twilio-active-target" style="font-size:0.75rem; color:var(--text-muted); margin:6px 0 10px;">+1 ...</div>
+              <button class="btn btn-red btn-sm" id="btn-hangup-twilio" style="width:100%; justify-content:center;">
+                <i data-lucide="phone-off"></i> Hang Up Phone Call
+              </button>
+            </div>
+          </div>
+
+          <!-- Right: Live Conversation Stream & Real-time Analysis -->
+          <div style="display:flex; flex-direction:column; gap:16px;">
+            
+            <!-- Live Telephony Conversation Log -->
+            <div class="card" style="min-height:300px; display:flex; flex-direction:column;">
+              <div class="card-header" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="margin:0; display:flex; align-items:center; gap:8px;">
+                  <i data-lucide="phone-call" style="color:var(--color-lime,#c5f82a); width:18px; height:18px;"></i> Live Phone Conversation
+                </h3>
+                <span class="badge badge-grey" id="phone-stream-status">Waiting for call...</span>
+              </div>
+              <div class="conversation-log" id="phone-conversation-log" style="flex:1; max-height:350px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:12px; background:var(--bg-darker,#0a0a0c);">
+                <div class="conv-placeholder" id="phone-conv-placeholder">Live call transcript between caller and Alex will appear here as you speak.</div>
+              </div>
+            </div>
+
+            <!-- Post-Call Phone Analysis Box -->
+            <div class="card" id="phone-analysis-card" style="display:none;">
+              <div class="card-header" style="margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;">
+                <h3 style="margin:0;"><i data-lucide="sparkles" style="color:var(--color-lime,#c5f82a); width:18px; height:18px;"></i> Post-Call AI Intelligence</h3>
+                <span class="badge badge-lime">Complete</span>
+              </div>
+              <div style="display:grid; grid-template-columns: 140px 1fr; gap:16px; align-items:center;">
+                <div class="score-circle-wrap" style="margin:0 auto;">
+                  <svg class="score-svg" viewBox="0 0 120 120" style="width:90px; height:90px;">
+                    <circle class="score-track" cx="60" cy="60" r="50"></circle>
+                    <circle class="score-fill" id="phone-score-fill-circle" cx="60" cy="60" r="50"
+                      stroke-dasharray="314" stroke-dashoffset="314"></circle>
+                  </svg>
+                  <div class="score-inner">
+                    <div class="score-number" id="phone-score-number" style="font-size:1.5rem;">0</div>
+                    <div class="score-label-inner" style="font-size:0.6rem;">Lead Score</div>
+                  </div>
+                </div>
+                <div class="analysis-rows" style="display:flex; flex-direction:column; gap:6px;">
+                  <div class="analysis-row" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span class="analysis-row-label">Sentiment</span>
+                    <span id="phone-analysis-sentiment">—</span>
+                  </div>
+                  <div class="analysis-row" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span class="analysis-row-label">Outcome</span>
+                    <span id="phone-analysis-outcome">—</span>
+                  </div>
+                  <div class="analysis-row" id="phone-whatsapp-row" style="display:none; justify-content:space-between; align-items:center;">
+                    <span class="analysis-row-label">WhatsApp Alert</span>
+                    <span class="badge badge-lime" id="phone-whatsapp-badge"><i data-lucide="message-square"></i> ✓ Sent</span>
+                  </div>
+                  <div class="analysis-row" id="phone-telegram-row" style="display:none; justify-content:space-between; align-items:center;">
+                    <span class="analysis-row-label">Telegram Alert</span>
+                    <span class="badge badge-lime" id="phone-telegram-badge"><i data-lucide="send"></i> ✓ Sent</span>
+                  </div>
+                  <div class="analysis-row" id="phone-sms-row" style="display:none; justify-content:space-between; align-items:center;">
+                    <span class="analysis-row-label">SMS Alert</span>
+                    <span class="badge badge-lime" id="phone-sms-badge"><i data-lucide="phone"></i> ✓ Sent</span>
+                  </div>
+                </div>
+              </div>
+              <div class="analysis-block" style="margin-top:10px;">
+                <h4 style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Reasoning</h4>
+                <p id="phone-analysis-reasoning" class="analysis-text" style="font-size:0.85rem; margin-top:4px;">—</p>
+              </div>
+              <div class="analysis-block" style="margin-top:8px;">
+                <h4 style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Summary</h4>
+                <p id="phone-analysis-summary" class="analysis-text" style="font-size:0.85rem; margin-top:4px;">—</p>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 3 — CALL SIMULATOR
+      ══════════════════════════════════════════ -->
+      <section id="section-simulator" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Call Simulator <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Live AI voice calls with real-time transcription</p>
+          </div>
+        </div>
+
+        <!-- Call Mode Tabs -->
+        <div class="call-mode-bar">
+          <div class="call-mode-label">Call Type</div>
+          <div class="call-mode-tabs" id="call-mode-tabs">
+            <button class="mode-tab active" data-mode="outbound">
+              <i data-lucide="phone-outgoing"></i>
+              <span>Outbound</span>
+              <small>You call them</small>
+            </button>
+            <button class="mode-tab" data-mode="inbound">
+              <i data-lucide="phone-incoming"></i>
+              <span>Inbound</span>
+              <small>They call you</small>
+            </button>
+            <button class="mode-tab" data-mode="marketing">
+              <i data-lucide="megaphone"></i>
+              <span>Marketing</span>
+              <small>Campaign call</small>
+            </button>
+          </div>
+        </div>
+
+        <!-- Real-Time Call Pipeline Status Bar -->
+        <div class="pipeline-bar" id="pipeline-bar">
+          <div class="pipeline-left">
+            <div class="voice-badge" id="sim-voice-badge">
+              <span class="voice-badge-dot"></span>
+              <span id="sim-voice-text">Checking voice clone...</span>
+            </div>
+          </div>
+          <div class="pipeline-center">
+            <div class="pipeline-stage" id="stage-indicator">
+              <span class="stage-icon" id="stage-icon"><i data-lucide="check-circle-2"></i></span>
+              <span class="stage-text" id="stage-text">System Ready</span>
+            </div>
+          </div>
+          <div class="pipeline-right">
+            <span class="model-tag" id="sim-model-tag"><i data-lucide="cpu"></i> Groq LLaMA / Chatterbox</span>
+          </div>
+        </div>
+
+        <div class="simulator-layout">
+
+          <!-- Left: Controls -->
+          <div class="card sim-controls">
+            <h3>Call Setup</h3>
+
+            <!-- Outbound / Marketing panel -->
+            <div id="panel-outbound" class="mode-panel">
+              <div class="form-group">
+                <label for="contact-select">Select Contact</label>
+                <select id="contact-select" class="form-select">
+                  <option value="">— Choose a contact —</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Inbound panel -->
+            <div id="panel-inbound" class="mode-panel" style="display:none">
+              <div class="form-group">
+                <label for="caller-id-input">Simulated Caller ID</label>
+                <input type="tel" id="caller-id-input" class="form-input" placeholder="+1 555 000 0000" />
+                <div class="field-hint" id="caller-match-hint">Type a phone number to auto-match a contact</div>
+              </div>
+              <div class="form-group">
+                <label>Matched Contact</label>
+                <div class="caller-match-box" id="caller-match-box">
+                  <i data-lucide="user-question"></i>
+                  <span>Unknown caller</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Marketing panel extra -->
+            <div id="panel-marketing" class="mode-panel" style="display:none">
+              <div class="form-group">
+                <label for="contact-select-mkt">Select Contact</label>
+                <select id="contact-select-mkt" class="form-select">
+                  <option value="">— Choose a contact —</option>
+                </select>
+              </div>
+              <div class="marketing-badge">
+                <i data-lucide="megaphone"></i>
+                Marketing Mode — AI opens with campaign pitch
+              </div>
+            </div>
+
+            <div class="sim-actions">
+              <button class="btn btn-lime btn-lg" id="btn-start-call">
+                <i data-lucide="phone-call"></i> Start Call
+              </button>
+              <button class="btn btn-dark btn-lg" id="btn-end-call" disabled>
+                <i data-lucide="phone-off"></i> End Call
+              </button>
+            </div>
+
+            <div class="call-timer-wrap" id="call-timer-wrap" style="display:none">
+              <div class="timer-label">Duration</div>
+              <div class="call-timer" id="call-timer">00:00</div>
+            </div>
+
+            <!-- TTS Voice Engine Selection for Simulator -->
+            <div class="form-group" style="margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border);">
+              <label for="sim-tts-engine" style="display:flex; justify-content:space-between; align-items:center; font-size: 0.8rem; font-weight: 700; margin-bottom: 6px;">
+                <span>TTS Voice Engine</span>
+                <span class="badge badge-lime" id="sim-tts-badge" style="font-size:0.65rem;">F5-TTS Active</span>
+              </label>
+              <select id="sim-tts-engine" class="form-select" style="font-size: 0.85rem; width: 100%;">
+                <option value="f5tts" selected>F5-TTS (Flow-Matching Natural Voice)</option>
+                <option value="luxtts">LuxTTS (Ultra-Fast 150x Voice)</option>
+                <option value="polly_joanna">Joanna — Natural US Female (edge-tts)</option>
+                <option value="polly_matthew">Matthew — Natural US Male (edge-tts)</option>
+                <option value="kannada_female">Sapna — Kannada Female (Studio)</option>
+                <option value="kannada_male">Gagan — Kannada Male (Studio)</option>
+                <option value="hindi_female">Swara — Hindi Female (Studio)</option>
+                <option value="hindi_male">Madhur — Hindi Male (Studio)</option>
+              </select>
+              <div class="sim-prewarm-row" style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+                <button class="btn btn-dark btn-sm" id="btn-sim-prewarm" style="flex:1; font-size:0.75rem; display:flex; align-items:center; justify-content:center; gap:6px;">
+                  <i data-lucide="zap"></i> <span id="btn-sim-prewarm-label">Re-Warm Selected Voice</span>
+                </button>
+                <button class="btn btn-outline btn-sm" id="btn-sim-preview-prewarm" style="display:none; font-size:0.75rem; padding:4px 10px; align-items:center; gap:4px;" title="Listen to pre-warmed greeting">
+                  <i data-lucide="volume-2"></i> Listen
+                </button>
+              </div>
+              <div id="sim-prewarm-hint" style="font-size:0.7rem; color:var(--text-muted); margin-top:6px; line-height:1.3;">
+                Pre-warms selected voice into GPU memory so conversation starts with 0.0s delay.
+              </div>
+
+              <!-- Language Selection for Simulator -->
+              <div class="form-group" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border);">
+                <label for="sim-language" style="display:flex; justify-content:space-between; align-items:center; font-size: 0.8rem; font-weight: 700; margin-bottom: 6px;">
+                  <span>Call Language</span>
+                  <span class="badge" id="sim-lang-badge" style="font-size:0.65rem; background:var(--bg-tertiary); color:var(--text-muted);">en-US</span>
+                </label>
+                <select id="sim-language" class="form-select" style="font-size: 0.85rem; width: 100%;">
+                  <option value="en-US" selected>English (US)</option>
+                  <option value="en-IN">English (India)</option>
+                  <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+                  <option value="hi-IN">Hindi (हिंदी)</option>
+                </select>
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">
+                  Wires microphone STT, LLM reply language, and neural studio voice.
+                </div>
+              </div>
+
+              <!-- Call Script Selection for Simulator -->
+              <div class="form-group" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border);">
+                <label for="sim-script-select" style="display:flex; justify-content:space-between; align-items:center; font-size: 0.8rem; font-weight: 700; margin-bottom: 6px;">
+                  <span>Active Call Script</span>
+                  <span class="badge" id="sim-script-badge" style="font-size:0.65rem; background:var(--bg-tertiary); color:var(--text-muted);">Optional</span>
+                </label>
+                <select id="sim-script-select" class="form-select" style="font-size: 0.85rem; width: 100%;">
+                  <option value="">— No script (free-form conversation) —</option>
+                </select>
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">
+                  Guides Alex to follow your structured pitch, questions, and close.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Center: Phone UI -->
+          <div class="card sim-phone">
+            <div class="phone-contact-name" id="phone-contact-name">Select a contact to begin</div>
+            <div class="phone-mode-tag" id="phone-mode-tag">Outbound</div>
+
+            <div class="mic-container" id="mic-container">
+              <div class="mic-rings">
+                <div class="mic-ring r1"></div>
+                <div class="mic-ring r2"></div>
+              </div>
+              <div class="mic-icon" id="mic-icon">
+                <i data-lucide="mic"></i>
+              </div>
+            </div>
+
+            <div class="mic-status" id="mic-status">Idle</div>
+
+            <div class="stt-preview" id="stt-preview">
+              <span class="stt-placeholder">Speech will appear here…</span>
+            </div>
+
+            <!-- Manual Speech / Text Input Fallback -->
+            <div class="sim-text-input-wrap" id="sim-text-input-wrap">
+              <input type="text" id="sim-text-input" class="form-input sim-text-input" placeholder="Type a message or speak into your microphone..." />
+              <button class="btn btn-lime btn-sm" id="btn-send-sim-text">
+                <i data-lucide="send"></i> Send
+              </button>
+            </div>
+
+            <div class="conversation-log" id="conversation-log">
+              <div class="conv-placeholder">Call log will appear once a call starts.</div>
+            </div>
+          </div>
+
+          <!-- Right: Analysis -->
+          <div class="card sim-analysis">
+            <h3>Call Analysis</h3>
+            <div class="analysis-placeholder" id="analysis-placeholder">
+              <i data-lucide="bar-chart-2"></i>
+              <p>End a call to see the full AI analysis</p>
+            </div>
+            <div id="analysis-results" style="display:none">
+              <div class="score-circle-wrap">
+                <svg class="score-svg" viewBox="0 0 120 120">
+                  <circle class="score-track" cx="60" cy="60" r="50"></circle>
+                  <circle class="score-fill" id="score-fill-circle" cx="60" cy="60" r="50"
+                    stroke-dasharray="314" stroke-dashoffset="314"></circle>
+                </svg>
+                <div class="score-inner">
+                  <div class="score-number" id="score-number">0</div>
+                  <div class="score-label-inner">Lead Score</div>
+                </div>
+              </div>
+
+              <div class="analysis-rows">
+                <div class="analysis-row">
+                  <span class="analysis-row-label">Sentiment</span>
+                  <span id="analysis-sentiment">—</span>
+                </div>
+                <div class="analysis-row">
+                  <span class="analysis-row-label">Outcome</span>
+                  <span id="analysis-outcome">—</span>
+                </div>
+                <div class="analysis-row" id="sim-whatsapp-row" style="display:none; justify-content:space-between; align-items:center;">
+                  <span class="analysis-row-label">WhatsApp Alert</span>
+                  <span class="badge badge-lime" id="sim-whatsapp-badge"><i data-lucide="message-square"></i> ✓ Sent</span>
+                </div>
+                <div class="analysis-row" id="telegram-row" style="display:none; justify-content:space-between; align-items:center;">
+                  <span class="analysis-row-label">Telegram Alert</span>
+                  <span class="badge badge-lime" id="sim-telegram-badge"><i data-lucide="send"></i> ✓ Sent</span>
+                </div>
+                <div class="analysis-row" id="sim-sms-row" style="display:none; justify-content:space-between; align-items:center;">
+                  <span class="analysis-row-label">SMS Alert</span>
+                  <span class="badge badge-lime" id="sim-sms-badge"><i data-lucide="phone"></i> ✓ Sent</span>
+                </div>
+              </div>
+
+              <div class="analysis-block">
+                <h4>Reasoning</h4>
+                <p id="analysis-reasoning" class="analysis-text">—</p>
+              </div>
+              <div class="analysis-block">
+                <h4>Summary</h4>
+                <p id="analysis-summary" class="analysis-text">—</p>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 3 — CONTACTS
+      ══════════════════════════════════════════ -->
+      <section id="section-contacts" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Contacts <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Manage your leads and customer relationships</p>
+          </div>
+          <button class="btn btn-lime" id="btn-add-contact">
+            <i data-lucide="user-plus"></i> Add Contact →
+          </button>
+        </div>
+
+        <div class="contacts-grid" id="contacts-grid">
+          <div class="loading-state"><div class="spinner"></div><p>Loading contacts…</p></div>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 4 — KNOWLEDGE BASE
+      ══════════════════════════════════════════ -->
+      <section id="section-knowledge" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Knowledge Base <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Upload documents to power your AI with product knowledge</p>
+          </div>
+        </div>
+
+        <div class="knowledge-layout">
+          <div class="card uploader-card">
+            <div class="dropzone" id="doc-dropzone">
+              <div class="dropzone-icon"><i data-lucide="upload-cloud"></i></div>
+              <p class="dropzone-title">Drop files here</p>
+              <p class="dropzone-sub">or <label for="doc-file-input" class="file-label">browse files</label></p>
+              <p class="dropzone-hint">PDF, TXT, or Markdown — max 20 MB</p>
+              <input type="file" id="doc-file-input" accept=".pdf,.txt,.md" multiple style="display:none" />
+            </div>
+            <div id="upload-progress-wrap" style="display:none">
+              <div class="progress-track">
+                <div class="progress-bar" id="upload-progress-bar"></div>
+              </div>
+              <div class="progress-label" id="upload-progress-label">Uploading…</div>
+            </div>
+          </div>
+
+          <div class="card doc-list-card">
+            <div class="card-header">
+              <h2><i data-lucide="file-text"></i> Indexed Documents</h2>
+              <span class="pill-count" id="doc-count">0 docs</span>
+            </div>
+            <div id="doc-list">
+              <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 5 — VOICES LIBRARY
+      ══════════════════════════════════════════ -->
+      <section id="section-voices" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Voices Library <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Manage native and custom AI cloned voices for real-time telephony and simulations</p>
+          </div>
+          <button class="btn btn-lime" id="btn-toggle-add-voice">
+            <i data-lucide="plus-circle"></i> Add New Voice →
+          </button>
+        </div>
+
+        <!-- ── ADD VOICE CARD (Collapsible) ── -->
+        <div class="card" id="card-add-voice" style="display:none; margin-bottom: 24px; border: 1.5px solid var(--accent); background: var(--card);">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border);">
+            <div>
+              <h3 style="font-size:1.05rem; font-family:var(--font-head); font-weight:700; margin:0; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="mic-2"></i> Create &amp; Clone Custom Voice
+              </h3>
+              <p style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">
+                Upload a 10–60s reference sample, run neural computation on GPU, verify with preview audio, then save to library.
+              </p>
+            </div>
+            <button class="btn btn-outline btn-sm" id="btn-close-add-voice" style="padding:4px 8px;">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <!-- Left Column: Details -->
+            <div>
+              <div class="form-group" style="margin-bottom: 14px;">
+                <label for="new-voice-name">Voice Name <span class="required">*</span></label>
+                <input type="text" id="new-voice-name" class="form-input" placeholder="e.g. Sarah (Executive Closer) or Mark (Support Lead)" />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 14px;">
+                <label for="new-voice-engine">TTS Neural Engine <span class="required">*</span></label>
+                <select id="new-voice-engine" class="form-select">
+                  <option value="f5tts" selected>F5-TTS &mdash; Flow-Matching Diffusion (Ultra-Realistic Studio Voice)</option>
+                  <option value="luxtts">LuxTTS &mdash; 4-Step Diffusion (150x Real-time, ~0.2s Latency)</option>
+                </select>
+                <div class="field-hint" style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">
+                  F5-TTS provides studio-level natural cadence; LuxTTS is lightning fast for conversations.
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 14px;">
+                <label for="new-voice-test-text">Sample Test Phrase (Optional)</label>
+                <input type="text" id="new-voice-test-text" class="form-input" placeholder="Hello! I am ready to handle your sales calls with Vocalyx." />
+              </div>
+            </div>
+
+            <!-- Right Column: Reference Audio Upload -->
+            <div>
+              <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted); margin-bottom:6px;">
+                Reference Voice Sample (.wav, .mp3) <span class="required">*</span>
+              </label>
+              <div class="dropzone" id="voice-dropzone" style="padding: 24px 16px;">
+                <div class="dropzone-icon"><i data-lucide="upload-cloud"></i></div>
+                <p class="dropzone-title">Drop audio file here</p>
+                <p class="dropzone-sub">or <label for="voice-file-input" class="file-label">browse files</label></p>
+                <p class="dropzone-hint">10&ndash;60s clean speech without background noise</p>
+                <input type="file" id="voice-file-input" accept=".mp3,.wav,audio/*" style="display:none" />
+              </div>
+
+              <div id="voice-file-info" class="voice-file-info" style="display:none; margin-top:10px;">
+                <i data-lucide="music"></i>
+                <span id="voice-file-name" style="font-size:0.8rem; font-weight:600;">No file selected</span>
+                <span id="voice-file-size" style="font-size:0.7rem; color:var(--text-muted); margin-left:auto;"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom: Computation & Save Bar -->
+          <div style="margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border);">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <button class="btn btn-dark btn-lg" id="btn-compute-voice" style="padding: 10px 22px;">
+                  <i data-lucide="cpu"></i> Compute Voice on GPU →
+                </button>
+                <span id="compute-status-hint" style="font-size:0.74rem; color:var(--text-muted);">
+                  Step 1: Compute voice conditioning on GPU to unlock Save button.
+                </span>
+              </div>
+
+              <div id="save-actions-group" style="display:flex; align-items:center; gap:14px;">
+                <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; cursor:pointer; margin:0;">
+                  <input type="checkbox" id="chk-activate-now" checked style="accent-color:var(--text);" />
+                  <span>Activate immediately after save</span>
+                </label>
+                <button class="btn btn-lime btn-lg" id="btn-save-voice" disabled style="padding: 10px 24px;">
+                  <i data-lucide="check"></i> Save Voice to Library
+                </button>
+              </div>
+            </div>
+
+            <!-- Computation Progress / Results Display -->
+            <div id="compute-result-box" style="display:none; margin-top:16px; padding:16px; border-radius:var(--radius); background:var(--bg-alt); border:1px solid var(--border);">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span class="badge badge-green" id="compute-status-badge"><i data-lucide="check-circle"></i> Computed &amp; Verified</span>
+                  <span id="compute-elapsed-text" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">⚡ ~2.3s</span>
+                </div>
+                <small style="color:var(--text-muted); font-size:0.72rem;">Preview generated speech sample below. Click "Save Voice to Library" to commit.</small>
+              </div>
+              <audio id="computed-voice-player" controls class="audio-player" style="width:100%; margin-top:6px;"></audio>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── VOICES LIBRARY GRID ── -->
+        <div class="card" style="margin-bottom: 24px;">
+          <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <h2 style="font-family:var(--font-head); font-size:1.1rem; font-weight:700; margin:0; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="library"></i> Available Voices
+              </h2>
+              <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Select an active voice for real-world phone calls and simulator testing</p>
+            </div>
+            <span class="pill-count" id="voices-count">0 voices</span>
+          </div>
+
+          <div id="voices-grid" class="voices-grid" style="margin-top: 14px;">
+            <div class="loading-state"><div class="spinner"></div><p>Loading voices…</p></div>
+          </div>
+        </div>
+
+        <!-- ── HOW IT WORKS INFO ── -->
+        <div class="card voice-info-card">
+          <div class="card-header">
+            <h2><i data-lucide="info"></i> Voice Architecture &amp; Engines</h2>
+          </div>
+          <div class="info-steps">
+            <div class="info-step">
+              <div class="info-step-num">1</div>
+              <div>
+                <strong>F5-TTS (Flow-Matching Diffusion)</strong>
+                <p>Ultra-realistic non-autoregressive voice cloning. Delivers natural human pauses, breathing, and pitch inflection.</p>
+              </div>
+            </div>
+            <div class="info-step">
+              <div class="info-step-num">2</div>
+              <div>
+                <strong>LuxTTS (150x Real-Time Ultra-Fast Diffusion)</strong>
+                <p>Generates high-fidelity cloned speech in 0.15s&ndash;0.25s on GPU, offering minimal latency for rapid-fire telephone exchanges.</p>
+              </div>
+            </div>
+            <div class="info-step">
+              <div class="info-step-num">3</div>
+              <div>
+                <strong>Amazon Polly (US Male &amp; Female Native Telephony)</strong>
+                <p>Native Twilio carrier synthesis with 0.0s GPU overhead. Rock-solid fallback for standard business calls.</p>
+              </div>
+            </div>
+            <div class="info-step">
+              <div class="info-step-num">4</div>
+              <div>
+                <strong>One-Click Activation &amp; Cross-Sync</strong>
+                <p>Setting an active voice instantly updates Twilio telephony, the browser Call Simulator, and pre-warms GPU audio greetings.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 6 — CALL HISTORY
+      ══════════════════════════════════════════ -->
+      <section id="section-history" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Call History <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Review all past calls, transcripts, and AI analysis</p>
+          </div>
+        </div>
+
+        <div class="card history-card">
+          <div class="history-toolbar" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+            <div class="search-wrap" style="flex:1; min-width:200px;">
+              <i data-lucide="search"></i>
+              <input type="text" id="history-search" class="form-input search-input" placeholder="Search by contact, outcome, sentiment…" />
+            </div>
+            <select id="history-filter-outcome" class="form-select" style="font-size:0.82rem; width:auto; min-width:150px;">
+              <option value="">All Outcomes</option>
+              <option value="Interested">Interested</option>
+              <option value="Not Interested">Not Interested</option>
+              <option value="Requested Callback">Requested Callback</option>
+              <option value="Time-Waster">Time-Waster</option>
+              <option value="Needs Follow-up">Needs Follow-up</option>
+            </select>
+            <select id="history-filter-score" class="form-select" style="font-size:0.82rem; width:auto; min-width:130px;">
+              <option value="">All Scores</option>
+              <option value="70">Hot Leads (≥70)</option>
+              <option value="40">Warm Leads (≥40)</option>
+              <option value="1">Any Score (≥1)</option>
+            </select>
+            <button class="btn btn-outline" id="btn-export-csv" style="white-space:nowrap;" title="Export filtered calls to CSV">
+              <i data-lucide="download"></i> Export CSV
+            </button>
+            <button class="btn btn-outline" id="btn-refresh-history">
+              <i data-lucide="refresh-cw"></i> Refresh
+            </button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr>
+                <th>Date</th><th>Contact</th><th>Score</th><th>Sentiment</th><th>Outcome</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="history-tbody">
+                <tr><td colspan="6" class="empty-row"><div class="spinner"></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 6.5 — CALL SCRIPTS
+      ══════════════════════════════════════════ -->
+      <section id="section-scripts" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Call Scripts <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Create structured pitch and qualification scripts to steer your AI voice representative</p>
+          </div>
+          <button class="btn btn-lime" id="btn-add-script">
+            <i data-lucide="plus-circle"></i> Add Script →
+          </button>
+        </div>
+
+        <!-- Add Script Card -->
+        <div class="card" id="add-script-card" style="display:none; margin-bottom:1.5rem;">
+          <div class="card-header">
+            <h2><i data-lucide="file-plus"></i> New Call Script</h2>
+          </div>
+          <div style="padding:1.5rem; display:flex; flex-direction:column; gap:1rem;">
+            <div class="form-group">
+              <label>Script Title *</label>
+              <input type="text" id="script-title-input" class="form-input" placeholder="e.g. Outbound Cold Outreach — SaaS Product Demo" />
+            </div>
+            <div class="form-group">
+              <label>Script Instructions & Flow *</label>
+              <textarea id="script-content-input" class="form-input" rows="8" style="font-family:monospace; font-size:0.85rem; resize:vertical;" placeholder="Example script structure:&#10;&#10;1. GREETING: Introduce as Alex from Vocalyx, confirm if they have 2 minutes.&#10;2. DISCOVERY: Ask how they currently qualify inbound leads and follow up.&#10;3. VALUE PROP: Explain our 24/7 AI voice representative clones the owner's voice and scores leads.&#10;4. CLOSE: Propose scheduling a 15-minute product walk-through this week."></textarea>
+            </div>
+            <div style="display:flex; gap:0.75rem;">
+              <button class="btn btn-lime" id="btn-save-script"><i data-lucide="save"></i> Save Script</button>
+              <button class="btn btn-outline" id="btn-cancel-script"><i data-lucide="x"></i> Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scripts List -->
+        <div id="scripts-list">
+          <div class="loading-state"><div class="spinner"></div><p>Loading scripts…</p></div>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 6.8 — MESSAGE ALERTS (SMS, WhatsApp, Telegram)
+      ══════════════════════════════════════════ -->
+      <section id="section-alerts" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Message Alerts <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Configure real-time post-call lead notifications across WhatsApp, SMS, and Telegram</p>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button class="btn btn-outline" id="btn-refresh-alerts">
+              <i data-lucide="refresh-cw"></i> Refresh Status
+            </button>
+          </div>
+        </div>
+
+        <!-- Alerts Channel Grid -->
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-bottom: 24px;">
+
+          <!-- ── CARD 1: WHATSAPP ALERTS (TWILIO) ── -->
+          <div class="card" style="display:flex; flex-direction:column; justify-content:space-between;">
+            <div>
+              <div class="card-header" style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                  <div style="width:42px; height:42px; border-radius:10px; background:rgba(37,211,102,0.12); color:#25D366; display:flex; align-items:center; justify-content:center; font-size:1.2rem;">
+                    <i data-lucide="message-circle"></i>
+                  </div>
+                  <div>
+                    <h3 style="font-size:1.05rem; font-weight:700; margin:0;">WhatsApp Alerts</h3>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Handled via Twilio WhatsApp API</p>
+                  </div>
+                </div>
+                <div id="wa-status-badge">
+                  <span class="badge" style="font-size:0.7rem;">Checking…</span>
+                </div>
+              </div>
+
+              <p style="font-size:0.8rem; color:var(--text-secondary); line-height:1.4; margin-bottom:14px;">
+                Sends instant lead dossiers (caller name, score 0-100, sentiment, summary) to your WhatsApp right after each call.
+              </p>
+
+              <!-- Twilio Disconnected Warning Banner (if Twilio not ready) -->
+              <div id="wa-twilio-warning" style="display:none; padding:12px; border-radius:8px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); margin-bottom:14px;">
+                <div style="display:flex; align-items:center; gap:8px; color:#f87171; font-weight:600; font-size:0.8rem;">
+                  <i data-lucide="alert-triangle"></i> Twilio Telephony Not Connected
+                </div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 10px 0;">
+                  WhatsApp alerts require Twilio credentials (Account SID & Auth Token) configured in Settings.
+                </p>
+                <button class="btn btn-outline btn-sm btn-nav-to-settings" style="font-size:0.75rem; width:100%; justify-content:center;">
+                  <i data-lucide="settings"></i> Configure Twilio in Settings →
+                </button>
+              </div>
+
+              <!-- Form Fields -->
+              <div class="form-group" style="margin-bottom:12px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                  <input type="checkbox" id="alert-wa-enabled" style="accent-color:var(--lime);" />
+                  <span>Enable WhatsApp Alerts on Call Completion</span>
+                </label>
+              </div>
+
+              <div class="form-group" style="margin-bottom:12px;">
+                <label for="alert-wa-to">Your WhatsApp Number <span class="required">*</span></label>
+                <input type="tel" id="alert-wa-to" class="form-input" placeholder="+15550001234 or +91..." style="font-size:0.85rem;" />
+                <div class="field-hint" style="font-size:0.7rem;">Include country code with '+' where alerts should be sent.</div>
+              </div>
+
+              <div class="form-group" style="margin-bottom:14px;">
+                <label for="alert-wa-from">Twilio WhatsApp Sender</label>
+                <input type="text" id="alert-wa-from" class="form-input" placeholder="whatsapp:+14155238886" style="font-size:0.85rem;" />
+                <div class="field-hint" style="font-size:0.7rem;">Defaults to Twilio Sandbox (<code>whatsapp:+14155238886</code>) or your approved number.</div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-top:10px; border-top:1px solid var(--border); padding-top:14px;">
+              <button class="btn btn-lime btn-sm" id="btn-save-wa-alert" style="flex:1; justify-content:center;">
+                <i data-lucide="save"></i> Save WhatsApp
+              </button>
+              <button class="btn btn-outline btn-sm" id="btn-test-wa-alert" style="justify-content:center;">
+                <i data-lucide="send"></i> Test WhatsApp
+              </button>
+            </div>
+          </div>
+
+          <!-- ── CARD 2: SMS TEXT ALERTS (TWILIO) ── -->
+          <div class="card" style="display:flex; flex-direction:column; justify-content:space-between;">
+            <div>
+              <div class="card-header" style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                  <div style="width:42px; height:42px; border-radius:10px; background:rgba(59,130,246,0.12); color:#3b82f6; display:flex; align-items:center; justify-content:center; font-size:1.2rem;">
+                    <i data-lucide="smartphone"></i>
+                  </div>
+                  <div>
+                    <h3 style="font-size:1.05rem; font-weight:700; margin:0;">SMS Text Alerts</h3>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Handled via Twilio SMS Gateway</p>
+                  </div>
+                </div>
+                <div id="sms-status-badge">
+                  <span class="badge" style="font-size:0.7rem;">Checking…</span>
+                </div>
+              </div>
+
+              <p style="font-size:0.8rem; color:var(--text-secondary); line-height:1.4; margin-bottom:14px;">
+                Sends immediate SMS text summaries with lead conversion score and key takeaways directly to your mobile phone.
+              </p>
+
+              <!-- Twilio Disconnected Warning Banner (if Twilio not ready) -->
+              <div id="sms-twilio-warning" style="display:none; padding:12px; border-radius:8px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); margin-bottom:14px;">
+                <div style="display:flex; align-items:center; gap:8px; color:#f87171; font-weight:600; font-size:0.8rem;">
+                  <i data-lucide="alert-triangle"></i> Twilio Telephony Not Connected
+                </div>
+                <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 10px 0;">
+                  SMS alerts use your Twilio phone number configured in Settings.
+                </p>
+                <button class="btn btn-outline btn-sm btn-nav-to-settings" style="font-size:0.75rem; width:100%; justify-content:center;">
+                  <i data-lucide="settings"></i> Configure Twilio in Settings →
+                </button>
+              </div>
+
+              <!-- Form Fields -->
+              <div class="form-group" style="margin-bottom:12px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                  <input type="checkbox" id="alert-sms-enabled" style="accent-color:var(--lime);" />
+                  <span>Enable SMS Text Alerts on Call Completion</span>
+                </label>
+              </div>
+
+              <div class="form-group" style="margin-bottom:12px;">
+                <label for="alert-sms-to">Your Mobile Phone Number <span class="required">*</span></label>
+                <input type="tel" id="alert-sms-to" class="form-input" placeholder="+15550001234 or +91..." style="font-size:0.85rem;" />
+                <div class="field-hint" style="font-size:0.7rem;">Must include country code with '+' (e.g. +91... or +1...).</div>
+              </div>
+
+              <div class="form-group" style="margin-bottom:14px;">
+                <label>Twilio Outbound Sender Number</label>
+                <input type="text" id="alert-sms-from-display" class="form-input" readonly disabled style="opacity:0.7; font-size:0.85rem;" placeholder="Twilio number from Settings" />
+                <div class="field-hint" style="font-size:0.7rem;">Configured in Twilio Settings.</div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-top:10px; border-top:1px solid var(--border); padding-top:14px;">
+              <button class="btn btn-lime btn-sm" id="btn-save-sms-alert" style="flex:1; justify-content:center;">
+                <i data-lucide="save"></i> Save SMS
+              </button>
+              <button class="btn btn-outline btn-sm" id="btn-test-sms-alert" style="justify-content:center;">
+                <i data-lucide="send"></i> Test SMS
+              </button>
+            </div>
+          </div>
+
+          <!-- ── CARD 3: TELEGRAM BOT ALERTS ── -->
+          <div class="card" style="display:flex; flex-direction:column; justify-content:space-between;">
+            <div>
+              <div class="card-header" style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                  <div style="width:42px; height:42px; border-radius:10px; background:rgba(0,136,204,0.12); color:#0088cc; display:flex; align-items:center; justify-content:center; font-size:1.2rem;">
+                    <i data-lucide="send"></i>
+                  </div>
+                  <div>
+                    <h3 style="font-size:1.05rem; font-weight:700; margin:0;">Telegram Alerts</h3>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Direct Telegram Bot API Integration</p>
+                  </div>
+                </div>
+                <div id="tg-status-badge">
+                  <span class="badge" style="font-size:0.7rem;">Checking…</span>
+                </div>
+              </div>
+
+              <p style="font-size:0.8rem; color:var(--text-secondary); line-height:1.4; margin-bottom:14px;">
+                Posts formatted Markdown cards with contact details, sentiment rating, and call summaries to your private Telegram chat.
+              </p>
+
+              <!-- Form Fields -->
+              <div class="form-group" style="margin-bottom:12px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                  <input type="checkbox" id="alert-tg-enabled" checked style="accent-color:var(--lime);" />
+                  <span>Enable Telegram Alerts on Call Completion</span>
+                </label>
+              </div>
+
+              <div class="form-group" style="margin-bottom:12px;">
+                <label for="alert-tg-token">Telegram Bot Token <span class="required">*</span></label>
+                <div style="position:relative;">
+                  <input type="password" id="alert-tg-token" class="form-input" placeholder="e.g. 123456789:AAHK..." style="font-size:0.85rem; padding-right:36px;" />
+                  <button type="button" id="btn-toggle-tg-token" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;">
+                    <i data-lucide="eye" style="width:16px; height:16px;"></i>
+                  </button>
+                </div>
+                <div class="field-hint" style="font-size:0.7rem;">Obtain from <code>@BotFather</code> on Telegram.</div>
+              </div>
+
+              <div class="form-group" style="margin-bottom:14px;">
+                <label for="alert-tg-chatid">Telegram Chat ID <span class="required">*</span></label>
+                <input type="text" id="alert-tg-chatid" class="form-input" placeholder="e.g. 123456789" style="font-size:0.85rem;" />
+                <div class="field-hint" style="font-size:0.7rem;">Your user or group ID from <code>@userinfobot</code>.</div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-top:10px; border-top:1px solid var(--border); padding-top:14px;">
+              <button class="btn btn-lime btn-sm" id="btn-save-tg-alert" style="flex:1; justify-content:center;">
+                <i data-lucide="save"></i> Save Telegram
+              </button>
+              <button class="btn btn-outline btn-sm" id="btn-test-tg-alert" style="justify-content:center;">
+                <i data-lucide="send"></i> Test Telegram
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- How Alerts Work Info Card -->
+        <div class="card" style="margin-top:14px;">
+          <div class="card-header">
+            <h2><i data-lucide="info"></i> How Vocalyx Post-Call Message Alerts Work</h2>
+          </div>
+          <div class="info-steps" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:16px; margin-top:10px;">
+            <div class="info-step" style="background:var(--bg-secondary); padding:14px; border-radius:8px; border:1px solid var(--border);">
+              <div class="info-step-num">1</div>
+              <div>
+                <strong>Automatic AI Call Analysis</strong>
+                <p style="font-size:0.78rem; color:var(--text-muted); margin-top:4px;">
+                  As soon as a phone call or simulator session ends, Groq LLM analyzes sentiment, conversion score (0-100), and commitments.
+                </p>
+              </div>
+            </div>
+            <div class="info-step" style="background:var(--bg-secondary); padding:14px; border-radius:8px; border:1px solid var(--border);">
+              <div class="info-step-num">2</div>
+              <div>
+                <strong>Multi-Channel Dispatch</strong>
+                <p style="font-size:0.78rem; color:var(--text-muted); margin-top:4px;">
+                  Alerts are dispatched simultaneously to all enabled channels: WhatsApp, SMS, and Telegram without delaying call teardown.
+                </p>
+              </div>
+            </div>
+            <div class="info-step" style="background:var(--bg-secondary); padding:14px; border-radius:8px; border:1px solid var(--border);">
+              <div class="info-step-num">3</div>
+              <div>
+                <strong>Immediate Lead Response</strong>
+                <p style="font-size:0.78rem; color:var(--text-muted); margin-top:4px;">
+                  Sales teams and managers receive immediate actionable insights on their phones to follow up while leads are hot.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════
+           SECTION 7 — SETTINGS
+      ══════════════════════════════════════════ -->
+      <section id="section-settings" class="section">
+        <div class="section-header">
+          <div>
+            <h1>Settings <span class="accent-dot">.</span></h1>
+            <p class="section-sub">Configure your backend and telephony integrations</p>
+          </div>
+        </div>
+
+        <div class="settings-layout">
+
+          <!-- Backend Connection -->
+          <div class="card settings-card">
+            <div class="settings-card-header">
+              <div class="settings-card-icon"><i data-lucide="server"></i></div>
+              <div>
+                <h3>Backend Connection</h3>
+                <p>Connected to Hugging Face Spaces Backend API</p>
+              </div>
+              <div class="connection-status-badge" id="conn-badge">
+                <div class="conn-dot" id="conn-dot"></div>
+                <span id="conn-label">Disconnected</span>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="backend-url-input">Backend API URL</label>
+              <div class="url-input-row">
+                <input type="url" id="backend-url-input" class="form-input" placeholder="https://ebedsouza-vocalyx.hf.space" />
+                <button class="btn btn-lime" id="btn-connect-backend">
+                  <i data-lucide="plug-zap"></i> Connect →
+                </button>
+              </div>
+              <div class="field-hint">Defaults to your live Hugging Face Space (ZeroGPU backend)</div>
+            </div>
+
+            <div class="health-info" id="health-info" style="display:none">
+              <div class="health-row"><span class="health-label">Model</span><span class="health-val" id="health-model">—</span></div>
+              <div class="health-row"><span class="health-label">TTS Engine</span><span class="health-val" id="health-tts">—</span></div>
+              <div class="health-row"><span class="health-label">RAG Docs</span><span class="health-val" id="health-docs">—</span></div>
+              <div class="health-row"><span class="health-label">Telegram</span><span class="health-val" id="health-telegram">—</span></div>
+            </div>
+
+            <div class="settings-instructions">
+              <div class="inst-step">
+                <div class="inst-num">1</div>
+                <div>Backend runs on <strong>Hugging Face Spaces (ZeroGPU)</strong></div>
+              </div>
+              <div class="inst-step">
+                <div class="inst-num">2</div>
+                <div>Connected to: <code>https://ebedsouza-vocalyx.hf.space</code></div>
+              </div>
+              <div class="inst-step">
+                <div class="inst-num">3</div>
+                <div>Click <strong>Connect</strong> to test live status or update backend URL</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Multilingual & Speech Settings -->
+          <div class="card settings-card">
+            <div class="settings-card-header">
+              <div class="settings-card-icon"><i data-lucide="globe"></i></div>
+              <div>
+                <h3>Multilingual & Speech Locale</h3>
+                <p>Configure default conversation language and voice recognition</p>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top:14px;">
+              <label for="default-app-language">Default Spoken Language</label>
+              <select id="default-app-language" class="form-select" style="font-size:0.9rem;">
+                <option value="en-US" selected>English (US) — en-US</option>
+                <option value="en-IN">English (India) — en-IN</option>
+                <option value="kn-IN">Kannada (ಕನ್ನಡ) — kn-IN</option>
+                <option value="hi-IN">Hindi (हिंदी) — hi-IN</option>
+              </select>
+              <div class="field-hint" style="margin-top:6px;">Default language used when launching calls without an assigned contact language.</div>
+            </div>
+          </div>
+
+          <!-- Twilio Telephony Settings -->
+          <div class="card settings-card twilio-card">
+            <div class="settings-card-header">
+              <div class="settings-card-icon twilio-icon"><i data-lucide="phone-call"></i></div>
+              <div>
+                <h3>Twilio Telephony Integration</h3>
+                <p>Make and receive real phone calls with Groq LLM + Cloned Voice</p>
+              </div>
+              <div class="connection-status-badge" id="twilio-settings-badge">
+                <div class="conn-dot disconnected" id="twilio-settings-dot"></div>
+                <span id="twilio-settings-label">Not Configured</span>
+              </div>
+            </div>
+
+            <div class="twilio-what-it-does">
+              <div class="twilio-feature">
+                <i data-lucide="phone-outgoing"></i>
+                <div>
+                  <strong>Outbound Calls</strong>
+                  <p>Dial any real phone number directly from Vocalyx using your Twilio account</p>
+                </div>
+              </div>
+              <div class="twilio-feature">
+                <i data-lucide="phone-incoming"></i>
+                <div>
+                  <strong>Inbound Calls</strong>
+                  <p>When someone calls your Twilio number, AI greets them, transcribes speech, and replies in real time</p>
+                </div>
+              </div>
+              <div class="twilio-feature">
+                <i data-lucide="user-check"></i>
+                <div>
+                  <strong>Caller ID Matching & Memory</strong>
+                  <p>Automatically matches incoming caller numbers to your contacts and remembers past notes</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="twilio-config-form" style="display:flex;flex-direction:column;gap:14px;margin-top:16px;">
+              <div class="form-group">
+                <label for="twilio-sid-input">Twilio Account SID</label>
+                <input type="text" id="twilio-sid-input" class="form-input" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                <div class="field-hint">Found on your Twilio Console homepage</div>
+              </div>
+
+              <div class="form-group">
+                <label for="twilio-token-input">Twilio Auth Token</label>
+                <div class="url-input-row">
+                  <input type="password" id="twilio-token-input" class="form-input" placeholder="Enter your Twilio Auth Token" />
+                  <button type="button" class="btn btn-dark" id="btn-toggle-twilio-token" title="Show/Hide">
+                    <i data-lucide="eye"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="twilio-phone-input">Twilio Phone Number</label>
+                <input type="tel" id="twilio-phone-input" class="form-input" placeholder="+12345678900" />
+                <div class="field-hint">Your active Twilio phone number in E.164 format (with + prefix)</div>
+              </div>
+
+              <div class="form-group">
+                <label for="twilio-voice-select">Telephony Voice Engine</label>
+                <select id="twilio-voice-select" class="form-select" style="width:100%;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-md);color:var(--text);font-size:0.9rem;">
+                  <option value="f5tts" selected>F5-TTS &mdash; Flow-Matching Diffusion Cloned Voice (Ultra-Realistic)</option>
+                  <option value="luxtts">LuxTTS &mdash; 150x Diffusion Cloned Voice (Ultra-Fast ~0.2s)</option>
+                  <option value="polly">Amazon Polly Matthew &mdash; Standard Twilio Telephony (Instant)</option>
+                </select>
+                <div class="field-hint">Synchronized with Phone Call dialer. Cloned Voice engines use your custom cloned voice weights.</div>
+              </div>
+
+              <div class="twilio-actions-row" style="display:flex;gap:10px;margin-top:6px;">
+                <button class="btn btn-lime btn-lg" id="btn-save-twilio">
+                  <i data-lucide="check-circle"></i> Save & Verify Twilio
+                </button>
+                <button class="btn btn-dark btn-lg" id="btn-test-twilio">
+                  <i data-lucide="refresh-cw"></i> Test Connection
+                </button>
+              </div>
+
+              <!-- Inbound Webhook Instructions & URL Display -->
+              <div class="twilio-webhook-box" style="margin-top:14px;padding:14px;background:var(--bg-subtle, rgba(255,255,255,0.03));border:1px solid var(--border);border-radius:var(--radius-md, 8px);">
+                <div class="webhook-box-title" style="font-weight:700;font-size:0.85rem;display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                  <i data-lucide="phone-incoming" style="width:16px;height:16px;color:#F22F46;"></i> Inbound Webhook URL (For Receiving Calls)
+                </div>
+                <p class="webhook-box-sub" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px;line-height:1.4;">
+                  To receive incoming calls, paste this URL into <strong>Twilio Console</strong> &rarr; <strong>Phone Numbers</strong> &rarr; Click your Number &rarr; <strong>Voice Configuration</strong> &rarr; <em>"A Call Comes In"</em> (HTTP POST):
+                </p>
+                <div class="url-input-row">
+                  <input type="text" id="twilio-webhook-display" class="form-input" readonly placeholder="Connect backend to view webhook URL" />
+                  <button class="btn btn-dark" id="btn-copy-webhook">
+                    <i data-lucide="copy"></i> Copy
+                  </button>
+                </div>
+              </div>
+
+              <!-- Message Alerts Navigation Link -->
+              <div style="margin-top:14px; padding:12px 14px; background:rgba(37,211,102,0.06); border:1px solid rgba(37,211,102,0.25); border-radius:var(--radius-md, 8px); display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                  <div style="font-weight:700; font-size:0.85rem; color:#25D366; display:flex; align-items:center; gap:6px;">
+                    <i data-lucide="bell"></i> WhatsApp &amp; SMS Post-Call Alerts
+                  </div>
+                  <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">
+                    Receive instant lead analysis and call summaries via WhatsApp, SMS, or Telegram.
+                  </div>
+                </div>
+                <button class="btn btn-lime btn-sm" id="btn-goto-alerts" style="white-space:nowrap;">
+                  Configure Alerts →
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+  </div><!-- /app-shell -->
+
+  <!-- ═══ MODAL: Add Contact ═══ -->
+  <div class="modal-overlay" id="modal-contact" style="display:none">
+    <div class="modal card">
+      <div class="modal-header">
+        <h2>Add New Contact</h2>
+        <button class="modal-close" id="modal-contact-close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Name <span class="required">*</span></label>
+          <input type="text" id="contact-name" class="form-input" placeholder="Full name" />
+        </div>
+        <div class="form-group">
+          <label>Phone <span class="required">*</span></label>
+          <input type="tel" id="contact-phone" class="form-input" placeholder="+1 555 000 0000" />
+        </div>
+        <div class="form-group">
+          <label>Preferred Language</label>
+          <select id="contact-language" class="form-select">
+            <option value="en-US" selected>English (US)</option>
+            <option value="en-IN">English (India)</option>
+            <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+            <option value="hi-IN">Hindi (हिंदी)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea id="contact-notes" class="form-input" rows="3" placeholder="Background info, goals, context…"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="modal-contact-cancel">Cancel</button>
+        <button class="btn btn-lime" id="modal-contact-save">
+          <i data-lucide="save"></i> Save Contact →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: Call Details ═══ -->
+  <div class="modal-overlay" id="modal-call-detail" style="display:none">
+    <div class="modal modal-lg card">
+      <div class="modal-header">
+        <h2>Call Details</h2>
+        <button class="modal-close" id="modal-detail-close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="detail-badges" id="detail-badges"></div>
+        <h4>Transcript</h4>
+        <div class="transcript-scroll" id="detail-transcript">—</div>
+        <h4>Lead Score Reasoning</h4>
+        <p id="detail-reasoning" class="analysis-text">—</p>
+        <h4>Summary</h4>
+        <p id="detail-summary" class="analysis-text">—</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="modal-detail-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: Edit Contact Memory ═══ -->
+  <div class="modal-overlay" id="modal-contact-edit" style="display:none">
+    <div class="modal card" style="max-width:540px;">
+      <div class="modal-header">
+        <h2><i data-lucide="user-cog"></i> Edit Contact & Memory</h2>
+        <button class="modal-close" id="modal-edit-close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-contact-id" />
+        <div class="form-row">
+          <div class="form-group">
+            <label>Full Name *</label>
+            <input type="text" id="edit-contact-name" class="form-input" />
+          </div>
+          <div class="form-group">
+            <label>Phone Number *</label>
+            <input type="text" id="edit-contact-phone" class="form-input" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Preferred Language</label>
+          <select id="edit-contact-language" class="form-select">
+            <option value="en-US">English (US)</option>
+            <option value="en-IN">English (India)</option>
+            <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+            <option value="hi-IN">Hindi (हिंदी)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Interest Level</label>
+          <select id="edit-contact-interest" class="form-select">
+            <option value="Unknown">Unknown</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Last Topic</label>
+          <input type="text" id="edit-contact-topic" class="form-input" placeholder="What was the last conversation about?" />
+        </div>
+        <div class="form-group">
+          <label>Concerns / Objections</label>
+          <textarea id="edit-contact-concerns" class="form-input" rows="2" placeholder="Customer objections, budget concerns, competitors…"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Commitments / Next Steps</label>
+          <textarea id="edit-contact-commitments" class="form-input" rows="2" placeholder="What did they promise or schedule?"></textarea>
+        </div>
+        <div class="form-group">
+          <label>General Notes</label>
+          <textarea id="edit-contact-notes" class="form-input" rows="2" placeholder="Background info, goals, context…"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="modal-edit-cancel">Cancel</button>
+        <button class="btn btn-lime" id="modal-edit-save">
+          <i data-lucide="save"></i> Save Changes →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
