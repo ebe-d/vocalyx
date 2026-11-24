@@ -37,6 +37,7 @@ vocalyx/
 ├── voice_clone.mp3          # Reference audio sample for voice cloning
 ├── backend/
 │   ├── __init__.py
+│   ├── requirements.txt     # Backend Python dependencies
 │   ├── main.py              # FastAPI application, static mounts & REST API
 │   ├── config.py            # API keys (Groq, Telegram), CUDA device & paths
 │   ├── database.py          # SQLAlchemy SQLite connection & session maker
@@ -68,7 +69,7 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 ```
 
 > **Note on PyTorch & CUDA:**

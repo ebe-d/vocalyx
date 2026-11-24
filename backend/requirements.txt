@@ -24,4 +24,3 @@ librosa
 omegaconf
 edge-tts
 f5-tts
-chatterbox-tts
