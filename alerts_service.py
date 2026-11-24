@@ -36,6 +36,7 @@ _alerts_config = {
         "enabled": getattr(config, "WHATSAPP_ENABLED", True) if config else True,
         "to_phone": getattr(config, "WHATSAPP_TO_PHONE", "") if config else "",
         "from_phone": getattr(config, "WHATSAPP_FROM_PHONE", "whatsapp:+14155238886") if config else "whatsapp:+14155238886",
+        "content_sid": getattr(config, "WHATSAPP_CONTENT_SID", "") if config else "",
     },
 }
 
@@ -124,6 +125,7 @@ def get_config() -> Dict[str, Any]:
             "enabled": bool(wa.get("enabled", False)),
             "to_phone": wa.get("to_phone", ""),
             "from_phone": wa.get("from_phone", "whatsapp:+14155238886"),
+            "content_sid": wa.get("content_sid", ""),
             "twilio_ready": tw_ready,
             "ready": tw_ready and bool(wa.get("to_phone")),
         },
@@ -238,8 +240,14 @@ def send_sms(text: str, to_phone: Optional[str] = None) -> Tuple[bool, str]:
         return False, f"Twilio SMS error: {exc}"
 
 
-def send_whatsapp(text: str, to_phone: Optional[str] = None, from_phone: Optional[str] = None) -> Tuple[bool, str]:
-    """Send alert via Twilio WhatsApp API."""
+def send_whatsapp(
+    text: str,
+    to_phone: Optional[str] = None,
+    from_phone: Optional[str] = None,
+    content_sid: Optional[str] = None,
+    template_vars: Optional[Dict[str, str]] = None,
+) -> Tuple[bool, str]:
+    """Send alert via Twilio WhatsApp API (free-form within 24h session, or ContentSid template)."""
     if not twilio_service or not twilio_service.is_configured():
         return False, "Twilio is not configured. Please enter Account SID and Auth Token in Settings."
 
@@ -248,6 +256,11 @@ def send_whatsapp(text: str, to_phone: Optional[str] = None, from_phone: Optiona
         return False, "No WhatsApp recipient phone number configured."
 
     sender = from_phone or _alerts_config["whatsapp"].get("from_phone") or "whatsapp:+14155238886"
+    resolved_content_sid = (
+        (content_sid if content_sid is not None else _alerts_config["whatsapp"].get("content_sid"))
+        or (getattr(config, "WHATSAPP_CONTENT_SID", "") if config else "")
+        or ""
+    ).strip()
 
     client = twilio_service.get_client()
     if not client:
@@ -272,13 +285,40 @@ def send_whatsapp(text: str, to_phone: Optional[str] = None, from_phone: Optiona
             digits_from = "+" + digits_from
         clean_from = f"whatsapp:{digits_from}"
 
-        # WhatsApp supports Markdown formatting (*bold*, etc.) natively
-        message = client.messages.create(
-            body=text,
-            from_=clean_from,
-            to=clean_to,
-        )
-        return True, f"WhatsApp alert sent (SID: {message.sid})"
+        # First attempt free-form body (works whenever the 24-hour customer service window is open)
+        try:
+            message = client.messages.create(
+                body=text,
+                from_=clean_from,
+                to=clean_to,
+            )
+            return True, f"WhatsApp alert sent (SID: {message.sid})"
+        except Exception as body_exc:
+            err_lower = str(body_exc).lower()
+            needs_template = any(
+                k in err_lower
+                for k in ("contentsid", "content_sid", "63016", "21654", "24 hour", "24-hour", "freeform", "outside the allowed window")
+            )
+            if needs_template and resolved_content_sid:
+                compact_text = " | ".join(line.strip() for line in text.replace("*", "").splitlines() if line.strip())[:950]
+                vars_payload = dict(template_vars or {})
+                vars_payload.setdefault("1", compact_text)
+                vars_payload.setdefault("2", "Vocalyx Call Alert")
+                message = client.messages.create(
+                    from_=clean_from,
+                    to=clean_to,
+                    content_sid=resolved_content_sid,
+                    content_variables=json.dumps(vars_payload),
+                )
+                return True, f"WhatsApp template alert sent via ContentSid (SID: {message.sid})"
+            if needs_template:
+                return (
+                    False,
+                    f"Twilio WhatsApp requires an active 24h session or ContentSid: "
+                    f"send your Sandbox join code (or 'hi') to {clean_from} on WhatsApp to open the 24h window, "
+                    f"OR enter an approved Twilio Content Template SID (HX...) in Alerts. ({body_exc})",
+                )
+            raise
     except Exception as exc:
         return False, f"Twilio WhatsApp error: {exc}"
 
@@ -347,7 +387,11 @@ def send_all_alerts_detailed(
 
     # 3. WhatsApp (Twilio)
     if results["whatsapp"]["enabled"]:
-        ok, res = send_whatsapp(msg_md)
+        wa_vars = {
+            "1": f"{contact_name} — Score {lead_score}/100 ({sentiment}, {outcome}): {summary}".strip()[:950],
+            "2": str(outcome or "Vocalyx Call Alert")[:120],
+        }
+        ok, res = send_whatsapp(msg_md, template_vars=wa_vars)
         results["whatsapp"]["ok"] = ok
         results["whatsapp"]["message"] = res
         if ok:

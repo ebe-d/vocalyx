@@ -170,6 +170,7 @@ class AlertTestRequest(BaseModel):
     bot_token: Optional[str] = None
     chat_id: Optional[str] = None
     from_phone: Optional[str] = None
+    content_sid: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -1419,7 +1420,13 @@ def test_alert_channel(req: AlertTestRequest):
     elif ch == "sms":
         ok, res = alerts_service.send_sms(test_msg, to_phone=req.to_phone)
     elif ch == "whatsapp":
-        ok, res = alerts_service.send_whatsapp(test_msg, to_phone=req.to_phone, from_phone=req.from_phone)
+        ok, res = alerts_service.send_whatsapp(
+            test_msg,
+            to_phone=req.to_phone,
+            from_phone=req.from_phone,
+            content_sid=req.content_sid,
+            template_vars={"1": "Alex Smith (Test) — Score 92/100 (Positive, Interested)", "2": "Vocalyx Test Alert"},
+        )
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported alert channel '{req.channel}'")
 

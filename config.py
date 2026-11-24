@@ -49,6 +49,7 @@ TTS_ENGINE = os.getenv("TTS_ENGINE", "f5tts").lower()
 # Multi-Channel Message Alerts
 WHATSAPP_TO_PHONE = os.getenv("WHATSAPP_TO_PHONE", "")
 WHATSAPP_FROM_PHONE = os.getenv("WHATSAPP_FROM_PHONE", "whatsapp:+14155238886")
+WHATSAPP_CONTENT_SID = os.getenv("WHATSAPP_CONTENT_SID", "")
 WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "true").lower() in ("true", "1", "yes")
 SMS_TO_PHONE = os.getenv("SMS_TO_PHONE", "")
 SMS_ENABLED = os.getenv("SMS_ENABLED", "false").lower() in ("true", "1", "yes")

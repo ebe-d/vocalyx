@@ -2609,12 +2609,14 @@ const alertsManager = {
     const waEnabled = document.getElementById('alert-wa-enabled');
     const waTo = document.getElementById('alert-wa-to');
     const waFrom = document.getElementById('alert-wa-from');
+    const waContentSid = document.getElementById('alert-wa-content-sid');
     const waBadge = document.getElementById('wa-status-badge');
     const waWarning = document.getElementById('wa-twilio-warning');
 
     if (waEnabled) waEnabled.checked = !!wa.enabled;
     if (waTo && !waTo.value && wa.to_phone) waTo.value = wa.to_phone;
     if (waFrom) waFrom.value = wa.from_phone || 'whatsapp:+14155238886';
+    if (waContentSid && !waContentSid.value && wa.content_sid) waContentSid.value = wa.content_sid;
 
     if (waWarning) waWarning.style.display = twReady ? 'none' : 'block';
     if (waBadge) {
@@ -2677,6 +2679,7 @@ const alertsManager = {
   async saveWhatsApp() {
     const toPhone = document.getElementById('alert-wa-to')?.value.trim();
     const fromPhone = document.getElementById('alert-wa-from')?.value.trim() || 'whatsapp:+14155238886';
+    const contentSid = document.getElementById('alert-wa-content-sid')?.value.trim() || '';
     const enabled = document.getElementById('alert-wa-enabled')?.checked || false;
 
     if (enabled && !toPhone) {
@@ -2688,7 +2691,7 @@ const alertsManager = {
     if (btn) btn.disabled = true;
     try {
       await api.updateAlertsConfig({
-        whatsapp: { enabled, to_phone: toPhone, from_phone: fromPhone }
+        whatsapp: { enabled, to_phone: toPhone, from_phone: fromPhone, content_sid: contentSid }
       });
       toast.success('WhatsApp alert settings saved!');
       await alertsManager.loadConfig();
@@ -2702,6 +2705,7 @@ const alertsManager = {
   async testWhatsApp() {
     const toPhone = document.getElementById('alert-wa-to')?.value.trim();
     const fromPhone = document.getElementById('alert-wa-from')?.value.trim() || 'whatsapp:+14155238886';
+    const contentSid = document.getElementById('alert-wa-content-sid')?.value.trim() || '';
     if (!toPhone) {
       toast.info('Please enter a destination WhatsApp number before testing.');
       return;
@@ -2713,6 +2717,7 @@ const alertsManager = {
         channel: 'whatsapp',
         to_phone: toPhone,
         from_phone: fromPhone,
+        content_sid: contentSid || undefined,
       });
       if (res && res.ok) {
         toast.success(`✓ WhatsApp alert sent! ${res.result || ''}`);

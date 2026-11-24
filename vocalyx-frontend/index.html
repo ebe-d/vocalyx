@@ -1049,10 +1049,16 @@
                 <div class="field-hint" style="font-size:0.7rem;">Include country code with '+' where alerts should be sent.</div>
               </div>
 
-              <div class="form-group" style="margin-bottom:14px;">
+              <div class="form-group" style="margin-bottom:12px;">
                 <label for="alert-wa-from">Twilio WhatsApp Sender</label>
                 <input type="text" id="alert-wa-from" class="form-input" placeholder="whatsapp:+14155238886" style="font-size:0.85rem;" />
                 <div class="field-hint" style="font-size:0.7rem;">Defaults to Twilio Sandbox (<code>whatsapp:+14155238886</code>) or your approved number.</div>
+              </div>
+
+              <div class="form-group" style="margin-bottom:14px;">
+                <label for="alert-wa-content-sid">Content Template SID (Optional, for &gt;24h Outbound)</label>
+                <input type="text" id="alert-wa-content-sid" class="form-input" placeholder="HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" style="font-size:0.85rem;" />
+                <div class="field-hint" style="font-size:0.7rem;">Needed only if your 24h WhatsApp Sandbox window expired; otherwise message your Sandbox number first to re-open 24h free-form alerts.</div>
               </div>
             </div>
 
