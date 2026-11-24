@@ -384,7 +384,7 @@ Starts the public ngrok tunnel on port 8000 and launches the live FastAPI server
 
 # Cell 12: Step 6 Code
 c12_code = """import os, sys, time, subprocess
-from pyngrok import ngrok
+from pyngrok import ngrok, conf
 
 # 1. Clean up any existing server processes
 os.system("pkill -9 -f 'main.py' 2>/dev/null")
@@ -405,7 +405,12 @@ if not NGROK_AUTH_TOKEN:
 if not NGROK_AUTH_TOKEN:
     raise RuntimeError("NGROK_AUTH_TOKEN is missing! Add it to Kaggle Add-ons -> Secrets and run Step 4.")
 
-ngrok.set_auth_token(NGROK_AUTH_TOKEN)
+conf.get_default().auth_token = NGROK_AUTH_TOKEN
+try:
+    ngrok.set_auth_token(NGROK_AUTH_TOKEN)
+except Exception as _ngrok_err:
+    if "already set" not in str(_ngrok_err).lower():
+        raise
 try:
     ngrok.kill()
 except Exception:
@@ -472,7 +477,7 @@ Stop Step 6 (Interrupt) and run this cell whenever you push new backend commits 
 
 # Cell 14: Step 7 Code
 c14_code = """import os, glob, shutil, subprocess, time
-from pyngrok import ngrok
+from pyngrok import ngrok, conf
 
 dest_dir = "/kaggle/working/vocaly"
 backend_dir = os.path.join(dest_dir, "backend")
@@ -525,7 +530,12 @@ except Exception:
 token = _get_secret("NGROK_AUTH_TOKEN", "")
 if not token:
     raise RuntimeError("NGROK_AUTH_TOKEN missing! Set it in Kaggle Secrets.")
-ngrok.set_auth_token(token)
+conf.get_default().auth_token = token
+try:
+    ngrok.set_auth_token(token)
+except Exception as _ngrok_err:
+    if "already set" not in str(_ngrok_err).lower():
+        raise
 tunnel = ngrok.connect(8000)
 public_url = str(tunnel.public_url).rstrip("/")
 os.environ["PUBLIC_BASE_URL"] = public_url
