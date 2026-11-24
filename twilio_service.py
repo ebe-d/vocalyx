@@ -418,7 +418,7 @@ def build_twiml(text: str, call_sid: str, base_url: str, wav_path: Optional[str]
         action=gather_action,
         method="POST",
         speech_timeout="auto",
-        timeout=8,
+        timeout=10,
         language=gather_lang,
     )
     response.append(gather)

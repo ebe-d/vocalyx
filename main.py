@@ -39,7 +39,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-import os, shutil, json, re
+import os, shutil, json, re, time
 from datetime import datetime
 
 from backend.database import get_db, init_db
@@ -1687,7 +1687,7 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
         return Response(content=twiml_xml, media_type="application/xml")
     except Exception as exc:
         print(f"[Twilio Voice Webhook Fallback]: {exc}")
-        safe_xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{base_url}/tts_output/prewarmed_greeting.wav</Play><Gather action="{base_url}/api/twilio/respond?call_sid={call_sid}" input="speech" method="POST" speechTimeout="auto" timeout="8"/><Redirect method="POST">{base_url}/api/twilio/respond?call_sid={call_sid}&amp;silence=1</Redirect></Response>'
+        safe_xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{base_url}/tts_output/prewarmed_greeting.wav</Play><Gather action="{base_url}/api/twilio/respond?call_sid={call_sid}" input="speech" method="POST" speechTimeout="auto" timeout="10"/><Redirect method="POST">{base_url}/api/twilio/respond?call_sid={call_sid}&amp;silence=1</Redirect></Response>'
         return Response(content=safe_xml, media_type="application/xml")
 
 
@@ -1872,8 +1872,8 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
         public_url = twilio_service.resolve_base_url(base_url)
         vr = VoiceResponse()
         vr.play(f"{public_url}/tts_output/prewarmed_reprompt.wav")
-        vr.append(Gather(input="speech", action=f"{public_url}/api/twilio/respond?call_sid={call_sid}", method="POST", speech_timeout="auto", timeout=8))
-        vr.redirect(f"{public_url}/api/twilio/respond?call_sid={call_sid}&silence=2", method="POST")
+        vr.append(Gather(input="speech", action=f"{public_url}/api/twilio/respond?call_sid={call_sid}", method="POST", speech_timeout="auto", timeout=10))
+        vr.redirect(f"{public_url}/api/twilio/respond?call_sid={call_sid}&silence=1", method="POST")
         return Response(content=str(vr), media_type="application/xml")
 
 
