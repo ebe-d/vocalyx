@@ -1367,7 +1367,14 @@ const simulator = {
       headers: { 'ngrok-skip-browser-warning': 'true' },
     });
     if (!res.ok) throw new Error(`Audio fetch HTTP ${res.status}`);
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (ct.includes('text/html')) {
+      throw new Error('Server returned HTML instead of WAV audio (check ngrok URL)');
+    }
     const blob = await res.blob();
+    if (!blob || blob.size <= 44) {
+      throw new Error('Synthesized audio file is empty (0 bytes)');
+    }
     return URL.createObjectURL(blob);
   },
 
@@ -1819,8 +1826,21 @@ const voicesManager = {
 
       const previewUrl = res.preview_url ? (res.preview_url.startsWith('http') ? res.preview_url : `${api.base.replace(/\/$/, '')}${res.preview_url}`) : '';
       if (player && previewUrl) {
-        player.src = previewUrl;
-        player.play().catch(() => {});
+        if (player.dataset.blobUrl) {
+          URL.revokeObjectURL(player.dataset.blobUrl);
+          delete player.dataset.blobUrl;
+        }
+        try {
+          // Fetch with ngrok-skip-browser-warning header so <audio> receives WAV bytes, not ngrok HTML warning
+          const blobUrl = await simulator.fetchAudioBlob(previewUrl);
+          player.dataset.blobUrl = blobUrl;
+          player.src = blobUrl;
+          player.load();
+          player.play().catch(() => {});
+        } catch (audioErr) {
+          console.warn('[Voice Compute] Blob preview fetch failed:', audioErr);
+          toast.error(`Preview audio failed to load: ${audioErr.message}`);
+        }
       }
 
       // CRITICAL: Enable Save button now that computation succeeded

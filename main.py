@@ -857,17 +857,21 @@ async def compute_voice(
     with open(saved_path, "wb") as f:
         shutil.copyfileobj(audio.file, f)
 
-    # Trim audio to 30 seconds max for voice computation (saves GPU time & avoids OOM)
+    # Trim audio to 30 seconds max and normalize to 48kHz mono PCM WAV (works for mp3/ogg/m4a/wav uploads)
     try:
         import subprocess as _sp
-        trimmed_path = saved_path.rsplit(".", 1)[0] + "_30s." + (saved_path.rsplit(".", 1)[-1] if "." in saved_path else "wav")
+        trimmed_path = saved_path.rsplit(".", 1)[0] + "_30s.wav"
         trim_res = _sp.run(
             ["ffmpeg", "-y", "-i", saved_path, "-t", "30", "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", trimmed_path],
             stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=30
         )
         if trim_res.returncode == 0 and os.path.exists(trimmed_path) and os.path.getsize(trimmed_path) > 1000:
-            os.replace(trimmed_path, saved_path)
-            print(f"[Voices] ✂️ Audio trimmed to max 30s for voice computation.")
+            try:
+                os.remove(saved_path)
+            except Exception:
+                pass
+            saved_path = trimmed_path
+            print(f"[Voices] ✂️ Audio trimmed & converted to 48kHz mono WAV (max 30s): {saved_path}")
     except Exception as _trim_err:
         print(f"[Voices] Trim note: {_trim_err}")
 
@@ -881,6 +885,8 @@ async def compute_voice(
         t0 = time.time()
         print(f"[Voices] ⚡ Computing voice clone for '{name}' using {engine}...")
         wav_path = tts_engine.synthesize(prompt_text, reference_audio=saved_path, engine=engine)
+        if not wav_path or not os.path.exists(wav_path) or os.path.getsize(wav_path) <= 44:
+            raise RuntimeError("Synthesized preview audio file was missing or empty.")
         elapsed = time.time() - t0
         filename = os.path.basename(wav_path)
         preview_url = f"/tts_output/{filename}"
