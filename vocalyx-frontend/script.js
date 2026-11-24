@@ -144,14 +144,14 @@ function renderAlertStatusRows(analysis, prefix = 'phone') {
         waBadge.className = 'badge badge-lime';
         waBadge.innerHTML = '<i data-lucide="check-circle" style="width:12px;height:12px;"></i> ✓ WhatsApp Sent';
       } else if (waAttempted && alertsRes.whatsapp.enabled === false) {
-        waBadge.className = 'badge badge-gray';
+        waBadge.className = 'badge badge-grey';
         waBadge.textContent = 'Disabled';
       } else if (waAttempted && alertsRes.whatsapp.message) {
         waBadge.className = 'badge badge-red';
         waBadge.title = alertsRes.whatsapp.message;
         waBadge.innerHTML = '<i data-lucide="alert-circle" style="width:12px;height:12px;"></i> Not Sent';
       } else {
-        waBadge.className = 'badge badge-gray';
+        waBadge.className = 'badge badge-grey';
         waBadge.innerHTML = '<i data-lucide="clock" style="width:12px;height:12px;"></i> Active';
       }
     }
@@ -168,7 +168,7 @@ function renderAlertStatusRows(analysis, prefix = 'phone') {
         tgBadge.className = 'badge badge-lime';
         tgBadge.innerHTML = '<i data-lucide="send" style="width:12px;height:12px;"></i> ✓ Telegram Sent';
       } else {
-        tgBadge.className = 'badge badge-gray';
+        tgBadge.className = 'badge badge-grey';
         tgBadge.innerHTML = '<i data-lucide="clock" style="width:12px;height:12px;"></i> Active';
       }
     }
@@ -187,7 +187,7 @@ function renderAlertStatusRows(analysis, prefix = 'phone') {
           smsBadge.className = 'badge badge-lime';
           smsBadge.innerHTML = '<i data-lucide="phone" style="width:12px;height:12px;"></i> ✓ SMS Sent';
         } else {
-          smsBadge.className = 'badge badge-gray';
+          smsBadge.className = 'badge badge-grey';
           smsBadge.innerHTML = '<i data-lucide="clock" style="width:12px;height:12px;"></i> SMS Ready';
         }
       }

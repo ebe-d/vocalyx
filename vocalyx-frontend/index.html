@@ -299,7 +299,7 @@
                 <span class="badge badge-yellow" id="voice-prewarm-badge" style="font-size:0.7rem;">Re-Warm Required</span>
               </div>
               <div style="display:flex; flex-wrap:wrap; gap:6px;">
-                <button class="btn btn-dark btn-sm" id="btn-prewarm-voice" style="flex:1 1 130px; min-width:0; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap;">
+                <button class="btn btn-dark btn-sm" id="btn-prewarm-voice" style="flex:1 1 130px; min-width:0; max-width:100%; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:normal; text-align:center;">
                   <i data-lucide="zap"></i> <span id="btn-prewarm-label">Re-Warm Voice (Required)</span>
                 </button>
                 <button class="btn btn-dark btn-sm" id="btn-preview-greeting" style="display:none; flex:0 0 auto; font-size:0.74rem; padding:7px 10px; align-items:center; gap:5px; white-space:nowrap;" title="Play pre-warmed greeting">
@@ -326,7 +326,7 @@
           </div>
 
           <!-- Right: Live Conversation Stream & Real-time Analysis -->
-          <div style="display:flex; flex-direction:column; gap:16px;">
+          <div class="phone-right-col">
             
             <!-- Live Telephony Conversation Log -->
             <div class="card" style="min-height:300px; display:flex; flex-direction:column;">
@@ -343,50 +343,50 @@
 
             <!-- Post-Call Phone Analysis Box -->
             <div class="card" id="phone-analysis-card" style="display:none;">
-              <div class="card-header" style="margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;">
-                <h3 style="margin:0;"><i data-lucide="sparkles" style="color:var(--color-lime,#c5f82a); width:18px; height:18px;"></i> Post-Call AI Intelligence</h3>
+              <div class="card-header" style="margin-bottom:14px;">
+                <h3 style="margin:0; display:flex; align-items:center; gap:8px;"><i data-lucide="sparkles" style="color:var(--color-lime,#c5f82a); width:18px; height:18px; flex-shrink:0;"></i> <span>Post-Call AI Intelligence</span></h3>
                 <span class="badge badge-lime">Complete</span>
               </div>
-              <div style="display:grid; grid-template-columns: 140px 1fr; gap:16px; align-items:center;">
-                <div class="score-circle-wrap" style="margin:0 auto;">
-                  <svg class="score-svg" viewBox="0 0 120 120" style="width:90px; height:90px;">
+              <div class="phone-analysis-top">
+                <div class="score-circle-wrap score-circle-sm">
+                  <svg class="score-svg" viewBox="0 0 120 120">
                     <circle class="score-track" cx="60" cy="60" r="50"></circle>
                     <circle class="score-fill" id="phone-score-fill-circle" cx="60" cy="60" r="50"
                       stroke-dasharray="314" stroke-dashoffset="314"></circle>
                   </svg>
                   <div class="score-inner">
-                    <div class="score-number" id="phone-score-number" style="font-size:1.5rem;">0</div>
-                    <div class="score-label-inner" style="font-size:0.6rem;">Lead Score</div>
+                    <div class="score-number" id="phone-score-number">0</div>
+                    <div class="score-label-inner">Lead Score</div>
                   </div>
                 </div>
-                <div class="analysis-rows" style="display:flex; flex-direction:column; gap:6px;">
-                  <div class="analysis-row" style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="analysis-rows">
+                  <div class="analysis-row">
                     <span class="analysis-row-label">Sentiment</span>
                     <span id="phone-analysis-sentiment">—</span>
                   </div>
-                  <div class="analysis-row" style="display:flex; justify-content:space-between; align-items:center;">
+                  <div class="analysis-row">
                     <span class="analysis-row-label">Outcome</span>
                     <span id="phone-analysis-outcome">—</span>
                   </div>
-                  <div class="analysis-row" id="phone-whatsapp-row" style="display:none; justify-content:space-between; align-items:center;">
+                  <div class="analysis-row" id="phone-whatsapp-row" style="display:none;">
                     <span class="analysis-row-label">WhatsApp Alert</span>
                     <span class="badge badge-lime" id="phone-whatsapp-badge"><i data-lucide="message-square"></i> ✓ Sent</span>
                   </div>
-                  <div class="analysis-row" id="phone-telegram-row" style="display:none; justify-content:space-between; align-items:center;">
+                  <div class="analysis-row" id="phone-telegram-row" style="display:none;">
                     <span class="analysis-row-label">Telegram Alert</span>
                     <span class="badge badge-lime" id="phone-telegram-badge"><i data-lucide="send"></i> ✓ Sent</span>
                   </div>
-                  <div class="analysis-row" id="phone-sms-row" style="display:none; justify-content:space-between; align-items:center;">
+                  <div class="analysis-row" id="phone-sms-row" style="display:none;">
                     <span class="analysis-row-label">SMS Alert</span>
                     <span class="badge badge-lime" id="phone-sms-badge"><i data-lucide="phone"></i> ✓ Sent</span>
                   </div>
                 </div>
               </div>
-              <div class="analysis-block" style="margin-top:10px;">
+              <div class="analysis-block" style="margin-top:14px;">
                 <h4 style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Reasoning</h4>
                 <p id="phone-analysis-reasoning" class="analysis-text" style="font-size:0.85rem; margin-top:4px;">—</p>
               </div>
-              <div class="analysis-block" style="margin-top:8px;">
+              <div class="analysis-block" style="margin-top:8px; margin-bottom:0;">
                 <h4 style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Summary</h4>
                 <p id="phone-analysis-summary" class="analysis-text" style="font-size:0.85rem; margin-top:4px;">—</p>
               </div>
@@ -526,7 +526,7 @@
                 <option value="hindi_male">Madhur — Hindi Male (Studio)</option>
               </select>
               <div class="sim-prewarm-row" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; align-items:stretch;">
-                <button class="btn btn-dark btn-sm" id="btn-sim-prewarm" style="flex:1 1 130px; min-width:0; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap;">
+                <button class="btn btn-dark btn-sm" id="btn-sim-prewarm" style="flex:1 1 130px; min-width:0; max-width:100%; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:normal; text-align:center;">
                   <i data-lucide="zap"></i> <span id="btn-sim-prewarm-label">Re-Warm Voice (Required)</span>
                 </button>
                 <button class="btn btn-outline btn-sm" id="btn-sim-preview-prewarm" style="display:none; flex:0 0 auto; font-size:0.74rem; padding:7px 10px; align-items:center; justify-content:center; gap:5px; white-space:nowrap;" title="Listen to selected voice preview">
