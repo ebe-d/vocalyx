@@ -58,7 +58,9 @@ def _resolve_reference_audio(reference_audio: str = None) -> str:
     """Finds the absolute path to the reference audio file."""
     import glob as _glob
     if reference_audio is None:
-        reference_audio = REFERENCE_AUDIO_PATH
+        reference_audio = getattr(config, "REFERENCE_AUDIO_PATH", None) if config else None
+        if not reference_audio:
+            reference_audio = REFERENCE_AUDIO_PATH
 
     candidates = [
         reference_audio,
@@ -740,7 +742,7 @@ def synthesize(
             return _synthesize_edge_tts(text, voice_type="female")
 
 
-def prewarm_engine(greeting_text: str = None, engine: str = None) -> str:
+def prewarm_engine(greeting_text: str = None, engine: str = None, reference_audio: str = None) -> str:
     """
     Pre-warms the active TTS engine on GPU, caches voice conditionals,
     and pre-generates ready-to-play telephony audio:
@@ -758,9 +760,9 @@ def prewarm_engine(greeting_text: str = None, engine: str = None) -> str:
     cfg_engine = getattr(config, "TWILIO_VOICE_ENGINE", None) if config else None
     active_engine = (engine or cfg_engine or os.getenv("TTS_ENGINE", "f5tts")).lower()
 
-    print(f"[TTS Pre-Warm] Warming up '{active_engine}' engine with greeting: '{greeting_text[:40]}...'")
+    print(f"[TTS Pre-Warm] Warming up '{active_engine}' engine (ref={reference_audio or 'default'}) with greeting: '{greeting_text[:40]}...'")
     t0 = time.time()
-    wav_path = synthesize(greeting_text, engine=active_engine)
+    wav_path = synthesize(greeting_text, reference_audio=reference_audio, engine=active_engine)
     total_time = time.time() - t0
 
     if wav_path and os.path.exists(wav_path):
@@ -770,7 +772,7 @@ def prewarm_engine(greeting_text: str = None, engine: str = None) -> str:
     # Also pre-generate reprompt and goodbye
     reprompt_file = os.path.join(TTS_OUTPUT_DIR, "prewarmed_reprompt.wav")
     try:
-        rw = synthesize("Are you still there? Please let me know how I can help.", engine=active_engine)
+        rw = synthesize("Are you still there? Please let me know how I can help.", reference_audio=reference_audio, engine=active_engine)
         if rw and os.path.exists(rw):
             shutil.copy2(rw, reprompt_file)
     except Exception as _re:
@@ -778,7 +780,7 @@ def prewarm_engine(greeting_text: str = None, engine: str = None) -> str:
 
     goodbye_file = os.path.join(TTS_OUTPUT_DIR, "prewarmed_goodbye.wav")
     try:
-        gw = synthesize("Thank you for your time with Vocalyx. Have a wonderful day!", engine=active_engine)
+        gw = synthesize("Thank you for your time with Vocalyx. Have a wonderful day!", reference_audio=reference_audio, engine=active_engine)
         if gw and os.path.exists(gw):
             shutil.copy2(gw, goodbye_file)
     except Exception as _ge:

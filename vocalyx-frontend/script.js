@@ -70,7 +70,13 @@ const api = {
   updateAlertsConfig:(d)    => api.post('/api/alerts/config', d),
   testAlert:         (d)    => api.post('/api/alerts/test', d),
   getPrewarmStatus:  ()     => api.get('/api/tts/prewarm-status'),
-  prewarmVoice:   (engine = null) => api._fetch('POST', engine ? `/api/tts/prewarm?engine=${encodeURIComponent(engine)}` : '/api/tts/prewarm', {}, false, 120000),
+  prewarmVoice:   (engine = null, voiceId = null) => {
+    const params = new URLSearchParams();
+    if (engine) params.set('engine', engine);
+    if (voiceId) params.set('voice_id', voiceId);
+    const qs = params.toString();
+    return api._fetch('POST', qs ? `/api/tts/prewarm?${qs}` : '/api/tts/prewarm', {}, false, 120000);
+  },
   getVoices:      ()     => api.get('/api/voices'),
   computeVoice:   (fd)   => api.postForm('/api/voices/compute', fd, 180000),
   saveVoice:      (d)    => api.post('/api/voices', d),
@@ -271,15 +277,25 @@ const languageEngineSync = {
     } else if (isEn) {
       const ev = engineSelectEl.value.toLowerCase();
       if (ev.includes('kannada') || ev.includes('hindi')) {
-        engineSelectEl.value = 'f5tts';
+        const activeEn = Array.from(engineSelectEl.options).find(o => !o.disabled);
+        engineSelectEl.value = activeEn ? activeEn.value : 'f5tts';
       }
     }
 
     const badgeId = engineSelectEl.id === 'phone-tts-engine' ? 'phone-tts-badge' : 'sim-tts-badge';
     const badge = document.getElementById(badgeId);
+    const selectedOpt = engineSelectEl.selectedOptions?.[0];
     if (badge && engineSelectEl.value) {
       const curVal = engineSelectEl.value.toUpperCase();
       badge.textContent = `${curVal} Active`;
+    }
+    if (engineSelectEl.id === 'sim-tts-engine' && selectedOpt) {
+      const modelTag = document.getElementById('sim-model-tag');
+      if (modelTag) {
+        const shortName = (selectedOpt.textContent || '').split('—')[0].trim() || engineSelectEl.value.toUpperCase();
+        modelTag.innerHTML = `<i data-lucide="cpu"></i> Groq LLaMA / ${escapeHtml(shortName)}`;
+        lucide.createIcons({ nodes: [modelTag] });
+      }
     }
   }
 };
@@ -991,8 +1007,9 @@ const simulator = {
         const ttsEngine = simSel?.value || 'f5tts';
         const activeVoiceId = simSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
 
-        // Instant 0.0s start if greeting already pre-warmed on server (English only)
-        if (voicePrewarmManager.isReady && voicePrewarmManager.greetingUrl && simLang === 'en-US') {
+        // Instant 0.0s start only if greeting already pre-warmed for this exact voice (English only)
+        const prewarmMatchesVoice = !activeVoiceId || !voicePrewarmManager.activeVoiceId || String(activeVoiceId) === String(voicePrewarmManager.activeVoiceId);
+        if (voicePrewarmManager.isReady && voicePrewarmManager.greetingUrl && simLang === 'en-US' && prewarmMatchesVoice) {
           audioUrl = voicePrewarmManager.greetingUrl;
         } else {
           simulator.setPipelineStatus('synthesizing', `Generating Alex greeting (${ttsEngine.toUpperCase()})...`);
@@ -1364,6 +1381,7 @@ const simulator = {
 
   async fetchAudioBlob(url) {
     const res = await fetch(url, {
+      cache: 'no-store',
       headers: { 'ngrok-skip-browser-warning': 'true' },
     });
     if (!res.ok) throw new Error(`Audio fetch HTTP ${res.status}`);
@@ -1889,10 +1907,17 @@ const voicesManager = {
       const res = await api.saveVoice(payload);
       toast.success(`Voice "${res.name}" saved to library!`);
 
+      if (activateNow && res.id) {
+        this._preferredVoiceId = String(res.id);
+      }
+
       this.resetAddForm();
       this.toggleAddCard(false);
 
       await this.loadVoices();
+      if (typeof voicePrewarmManager !== 'undefined') {
+        voicePrewarmManager.checkStatus();
+      }
 
       if (activateNow) {
         toast.info(`Active voice set to "${res.name}" (${res.engine.toUpperCase()})`);
@@ -1904,10 +1929,12 @@ const voicesManager = {
   },
 
   async activate(voiceId) {
+    this._preferredVoiceId = String(voiceId);
     toast.info('Activating voice on server and pre-warming GPU...');
     try {
       const res = await api.activateVoice(voiceId);
       if (res && res.success) {
+        this._preferredVoiceId = String(res.active_voice?.id || voiceId);
         toast.success(`Voice "${res.active_voice.name}" is now active!`);
         await this.loadVoices();
         if (typeof voicePrewarmManager !== 'undefined') {
@@ -2003,39 +2030,68 @@ const voicesManager = {
       return `${v.name} — English (Studio)`;
     };
 
+    const curPhoneVoiceId = phoneSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
+    const curSimVoiceId = simSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
     const curPhoneVal = phoneSel?.value;
     const curSimVal = simSel?.value;
 
-    // Build options once — no data-orig-text in HTML options since we build labels fresh each time
+    // Build options once — mark server-active voice selected cleanly
     const optionsHtml = this.voices.map(v => {
       const lbl = buildVoiceLabel(v);
       return `<option value="${v.engine}" data-voice-id="${v.id}" data-voice-type="${v.voice_type}" data-orig-text="${escapeHtml(lbl)}" ${v.is_active ? 'selected' : ''}>${escapeHtml(lbl)}</option>`;
     }).join('');
 
+    const restoreVoiceSelection = (sel, prevVoiceId, prevEngineVal) => {
+      if (!sel) return;
+      const targetVoiceId = this._preferredVoiceId || (activeVoice ? String(activeVoice.id) : null) || prevVoiceId;
+      const opts = Array.from(sel.options);
+      let idx = targetVoiceId ? opts.findIndex(o => o.dataset.voiceId === String(targetVoiceId)) : -1;
+      if (idx < 0 && prevEngineVal) {
+        idx = opts.findIndex(o => o.value === prevEngineVal);
+      }
+      if (idx >= 0) sel.selectedIndex = idx;
+    };
+
     if (phoneSel) {
       phoneSel.innerHTML = optionsHtml;
-      if (curPhoneVal && Array.from(phoneSel.options).some(o => o.value === curPhoneVal)) {
-        phoneSel.value = curPhoneVal;
-      }
+      restoreVoiceSelection(phoneSel, curPhoneVoiceId, curPhoneVal);
       const pLang = document.getElementById('phone-call-language')?.value || 'en-US';
       if (typeof languageEngineSync !== 'undefined') {
         languageEngineSync.syncFromLanguage(pLang, phoneSel);
       }
       const badge = document.getElementById('phone-tts-badge');
-      if (badge && activeVoice) badge.textContent = `${(activeVoice.engine || 'f5tts').toUpperCase()} Active`;
+      const selOpt = phoneSel.selectedOptions?.[0];
+      const chosenV = this.voices.find(v => String(v.id) === String(selOpt?.dataset?.voiceId)) || activeVoice;
+      if (badge && chosenV) badge.textContent = `${(chosenV.engine || 'f5tts').toUpperCase()} Active`;
     }
 
     if (simSel) {
       simSel.innerHTML = optionsHtml;
-      if (curSimVal && Array.from(simSel.options).some(o => o.value === curSimVal)) {
-        simSel.value = curSimVal;
-      }
+      restoreVoiceSelection(simSel, curSimVoiceId, curSimVal);
       const sLang = state.selectedLanguage || document.getElementById('sim-language')?.value || 'en-US';
       if (typeof languageEngineSync !== 'undefined') {
         languageEngineSync.syncFromLanguage(sLang, simSel);
       }
       const badge = document.getElementById('sim-tts-badge');
-      if (badge && activeVoice) badge.textContent = `${(activeVoice.engine || 'f5tts').toUpperCase()} Active`;
+      const selOpt = simSel.selectedOptions?.[0];
+      const chosenV = this.voices.find(v => String(v.id) === String(selOpt?.dataset?.voiceId)) || activeVoice;
+      if (badge && chosenV) badge.textContent = `${(chosenV.engine || 'f5tts').toUpperCase()} Active`;
+
+      const modelTag = document.getElementById('sim-model-tag');
+      if (modelTag && chosenV) {
+        const shortName = (chosenV.name || '').split('(')[0].trim() || (chosenV.engine || 'F5-TTS').toUpperCase();
+        modelTag.innerHTML = `<i data-lucide="cpu"></i> Groq LLaMA / ${escapeHtml(shortName)}`;
+        lucide.createIcons({ nodes: [modelTag] });
+      }
+
+      const prevBtn = document.getElementById('btn-sim-preview-prewarm');
+      if (prevBtn && chosenV) {
+        prevBtn.dataset.voiceId = String(chosenV.id || '');
+        if (chosenV.preview_url) {
+          prevBtn.dataset.url = chosenV.preview_url;
+          prevBtn.style.display = 'inline-flex';
+        }
+      }
     }
   }
 };
@@ -2832,12 +2888,14 @@ const alertsManager = {
 const voicePrewarmManager = {
   isReady: false,
   greetingUrl: null,
+  activeVoiceId: null,
 
   async checkStatus() {
     const badge = document.getElementById('voice-prewarm-badge');
     const label = document.getElementById('btn-prewarm-label');
     const prevBtn = document.getElementById('btn-preview-greeting');
     const hint = document.getElementById('voice-prewarm-hint');
+    const simPrevBtn = document.getElementById('btn-sim-preview-prewarm');
     if (!badge) return;
 
     try {
@@ -2845,11 +2903,18 @@ const voicePrewarmManager = {
       if (res && res.ready) {
         this.isReady = true;
         this.greetingUrl = res.greeting_url;
+        this.activeVoiceId = res.active_voice_id ? String(res.active_voice_id) : this.activeVoiceId;
         badge.className = 'badge badge-lime';
         badge.textContent = '🟢 Ready (0.0s)';
         if (label) label.textContent = 'Re-Warm Voice';
         if (prevBtn) prevBtn.style.display = 'inline-flex';
-        if (hint) hint.innerHTML = '<span style="color:var(--color-lime,#c5f82a);">✓ Cloned voice greeting is ready on disk. Phone call will connect with 0.0s delay!</span>';
+        if (simPrevBtn) {
+          simPrevBtn.style.display = 'inline-flex';
+          if (res.greeting_url) simPrevBtn.dataset.url = res.greeting_url;
+          if (this.activeVoiceId) simPrevBtn.dataset.voiceId = this.activeVoiceId;
+        }
+        const vLabel = res.active_voice_name ? `${escapeHtml(res.active_voice_name)} greeting` : 'Cloned voice greeting';
+        if (hint) hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${vLabel} is ready on disk. Phone call will connect with 0.0s delay!</span>`;
       } else {
         this.isReady = false;
         badge.className = 'badge badge-grey';
@@ -2868,7 +2933,9 @@ const voicePrewarmManager = {
   },
 
   async prewarm() {
-    const activeEngine = document.getElementById('phone-tts-engine')?.value || 'f5tts';
+    const phoneSel = document.getElementById('phone-tts-engine');
+    const activeEngine = phoneSel?.value || 'f5tts';
+    const voiceId = phoneSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
     const badge = document.getElementById('voice-prewarm-badge');
     const btn = document.getElementById('btn-prewarm-voice');
     const label = document.getElementById('btn-prewarm-label');
@@ -2909,11 +2976,12 @@ const voicePrewarmManager = {
     }, 2500);
 
     try {
-      const res = await api.prewarmVoice(activeEngine);
+      const res = await api.prewarmVoice(activeEngine, voiceId);
       clearInterval(pollInterval);
       if (res && res.ready) {
         this.isReady = true;
         this.greetingUrl = res.greeting_url;
+        this.activeVoiceId = res.voice_id ? String(res.voice_id) : voiceId;
         if (badge) {
           badge.className = 'badge badge-lime';
           badge.textContent = '🟢 Ready (0.0s)';
@@ -2959,19 +3027,28 @@ const voicePrewarmManager = {
   },
 
   async preview() {
-    if (!this.greetingUrl) {
+    const phoneSel = document.getElementById('phone-tts-engine');
+    const selVoiceId = phoneSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
+    const matchedVoice = selVoiceId && typeof voicesManager !== 'undefined'
+      ? (voicesManager.voices || []).find(v => String(v.id) === String(selVoiceId))
+      : null;
+    const rawUrl = (matchedVoice && String(selVoiceId) !== String(this.activeVoiceId) && matchedVoice.preview_url)
+      ? matchedVoice.preview_url
+      : (this.greetingUrl || matchedVoice?.preview_url);
+    if (!rawUrl) {
       toast.info('No pre-warmed greeting available yet. Click "Ready Cloned Voice" to generate.');
       return;
     }
-    toast.info('Loading pre-warmed greeting audio...');
+    toast.info('Loading voice greeting audio...');
     try {
-      const fullUrl = this.greetingUrl.startsWith('http') ? this.greetingUrl : `${api.base.replace(/\/$/, '')}${this.greetingUrl}`;
+      const baseFull = rawUrl.startsWith('http') ? rawUrl : `${api.base.replace(/\/$/, '')}${rawUrl}`;
+      const fullUrl = `${baseFull}${baseFull.includes('?') ? '&' : '?'}t=${Date.now()}`;
       const blobUrl = await simulator.fetchAudioBlob(fullUrl);
       const audio = new Audio(blobUrl);
       audio.onended = () => URL.revokeObjectURL(blobUrl);
       audio.onerror = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
-      toast.success('Playing pre-warmed voice greeting!');
+      toast.success(`Playing ${matchedVoice?.name || 'pre-warmed voice'} greeting!`);
     } catch (e) {
       toast.error(`Audio playback note: ${e.message}`);
     }
@@ -2983,6 +3060,8 @@ const simPrewarm = {
   async prewarm() {
     const simSel = document.getElementById('sim-tts-engine');
     const engine = simSel?.value || 'f5tts';
+    const selOpt = simSel?.selectedOptions?.[0];
+    const voiceId = selOpt?.dataset?.voiceId || null;
     const btn = document.getElementById('btn-sim-prewarm');
     const label = document.getElementById('btn-sim-prewarm-label');
     const prevBtn = document.getElementById('btn-sim-preview-prewarm');
@@ -2990,21 +3069,24 @@ const simPrewarm = {
 
     if (btn) btn.disabled = true;
     if (label) label.textContent = `Warming ${engine.toUpperCase()}...`;
-    if (hint) hint.textContent = `Allocating GPU memory and caching ${engine.toUpperCase()} voice weights...`;
-    toast.info(`Pre-warming ${engine.toUpperCase()} for Call Simulator...`);
+    if (hint) hint.textContent = `Allocating GPU memory and caching voice weights...`;
+    toast.info(`Pre-warming selected voice (${engine.toUpperCase()}) for Call Simulator...`);
 
     try {
-      const res = await api.prewarmVoice(engine);
+      const res = await api.prewarmVoice(engine, voiceId);
       if (res && res.ready) {
         voicePrewarmManager.isReady = true;
         voicePrewarmManager.greetingUrl = res.greeting_url || '/tts_output/prewarmed_greeting.wav';
-        if (label) label.textContent = `Re-Warm Voice (Ready)`;
+        voicePrewarmManager.activeVoiceId = res.voice_id ? String(res.voice_id) : (voiceId ? String(voiceId) : null);
+        if (label) label.textContent = `Re-Warm (Ready)`;
         if (prevBtn) {
           prevBtn.style.display = 'inline-flex';
           prevBtn.dataset.url = res.greeting_url || '/tts_output/prewarmed_greeting.wav';
+          prevBtn.dataset.voiceId = voicePrewarmManager.activeVoiceId || '';
         }
-        if (hint) hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ Cloned voice ready! Starting call will play greeting with 0.0s delay.</span>`;
-        toast.success(`✓ ${engine.toUpperCase()} voice pre-warmed and ready (${res.elapsed_seconds || '0.1'}s)!`);
+        const vName = res.voice_name || selOpt?.textContent?.split('—')?.[0]?.trim() || engine.toUpperCase();
+        if (hint) hint.innerHTML = `<span style="color:var(--color-lime,#c5f82a);">✓ ${escapeHtml(vName)} ready! Starting call plays with 0.0s delay.</span>`;
+        toast.success(`✓ ${vName} pre-warmed and ready (${res.elapsed_seconds || '0.1'}s)!`);
       } else {
         throw new Error(res.message || 'Prewarm incomplete');
       }
@@ -3018,16 +3100,35 @@ const simPrewarm = {
   },
 
   async preview() {
+    const simSel = document.getElementById('sim-tts-engine');
+    const selOpt = simSel?.selectedOptions?.[0];
+    const selVoiceId = selOpt?.dataset?.voiceId || null;
+    const selEngine = simSel?.value || 'f5tts';
+    const matchedVoice = typeof voicesManager !== 'undefined'
+      ? ((voicesManager.voices || []).find(v => selVoiceId && String(v.id) === String(selVoiceId))
+        || (voicesManager.voices || []).find(v => v.engine === selEngine))
+      : null;
+
     const prevBtn = document.getElementById('btn-sim-preview-prewarm');
-    const url = prevBtn?.dataset?.url || voicePrewarmManager.greetingUrl || '/tts_output/prewarmed_greeting.wav';
-    toast.info('Loading pre-warmed audio preview...');
+    let rawUrl = null;
+    if (prevBtn?.dataset?.url && (!selVoiceId || prevBtn.dataset.voiceId === String(selVoiceId))) {
+      rawUrl = prevBtn.dataset.url;
+    } else if (matchedVoice?.preview_url) {
+      rawUrl = matchedVoice.preview_url;
+    } else {
+      rawUrl = voicePrewarmManager.greetingUrl || '/tts_output/prewarmed_greeting.wav';
+    }
+
+    toast.info(`Loading ${matchedVoice?.name || 'selected voice'} preview...`);
     try {
-      const fullUrl = url.startsWith('http') ? url : `${api.base.replace(/\/$/, '')}${url}`;
+      const baseFull = rawUrl.startsWith('http') ? rawUrl : `${api.base.replace(/\/$/, '')}${rawUrl}`;
+      const fullUrl = `${baseFull}${baseFull.includes('?') ? '&' : '?'}t=${Date.now()}`;
       const blobUrl = await simulator.fetchAudioBlob(fullUrl);
       const audio = new Audio(blobUrl);
       audio.onended = () => URL.revokeObjectURL(blobUrl);
+      audio.onerror = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
-      toast.success('Playing pre-warmed greeting!');
+      toast.success(`Playing ${matchedVoice?.name || 'voice'} preview!`);
     } catch (e) {
       toast.error(`Playback note: ${e.message}`);
     }
@@ -3321,26 +3422,31 @@ function bindEvents() {
   document.getElementById('sim-tts-engine')?.addEventListener('change', (e) => {
     const opt = e.target.selectedOptions ? e.target.selectedOptions[0] : null;
     const voiceId = opt ? opt.dataset.voiceId : null;
+    const val = e.target.value;
+    const badge = document.getElementById('sim-tts-badge');
+    const modelTag = document.getElementById('sim-model-tag');
+    const prevBtn = document.getElementById('btn-sim-preview-prewarm');
+    const chosenVoice = (voiceId && typeof voicesManager !== 'undefined')
+      ? (voicesManager.voices || []).find(v => String(v.id) === String(voiceId))
+      : null;
+
+    if (badge) badge.textContent = `${val.toUpperCase()} Active`;
+    if (modelTag) {
+      const displayName = chosenVoice?.name?.split('(')?.[0]?.trim() || (val === 'f5tts' ? 'F5-TTS' : val === 'luxtts' ? 'LuxTTS' : val.includes('kannada') ? 'Sapna (Kannada)' : val.includes('hindi') ? 'Swara (Hindi)' : val.toUpperCase());
+      modelTag.innerHTML = `<i data-lucide="cpu"></i> Groq LLaMA / ${escapeHtml(displayName)}`;
+      lucide.createIcons({ nodes: [modelTag] });
+    }
+    if (prevBtn && chosenVoice) {
+      prevBtn.dataset.voiceId = String(chosenVoice.id || '');
+      if (chosenVoice.preview_url) {
+        prevBtn.dataset.url = chosenVoice.preview_url;
+        prevBtn.style.display = 'inline-flex';
+      }
+    }
+
     if (voiceId) {
       voicesManager.activate(voiceId);
     } else {
-      const val = e.target.value;
-      const badge = document.getElementById('sim-tts-badge');
-      const modelTag = document.getElementById('sim-model-tag');
-      const labelMap = {
-        f5tts: 'F5-TTS Active',
-        luxtts: 'LuxTTS Active',
-        kannada_female: 'Sapna (Kannada)',
-        kannada_male: 'Gagan (Kannada)',
-        hindi_female: 'Swara (Hindi)',
-        hindi_male: 'Madhur (Hindi)'
-      };
-      if (badge) badge.textContent = labelMap[val] || val;
-      if (modelTag) {
-        const displayName = val === 'f5tts' ? 'F5-TTS' : val === 'luxtts' ? 'LuxTTS' : val.includes('kannada') ? 'Sapna (Kannada)' : val.includes('hindi') ? 'Swara (Hindi)' : 'F5-TTS';
-        modelTag.innerHTML = `<i data-lucide="cpu"></i> Groq LLaMA / ${displayName}`;
-        lucide.createIcons({ nodes: [modelTag] });
-      }
       toast.info(`Voice engine set to: ${val.toUpperCase()}`);
     }
     const simLang = document.getElementById('sim-language');

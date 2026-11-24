@@ -1195,7 +1195,7 @@ textarea.form-input { resize: vertical; min-height: 90px; }
    ══════════════════════════════════════════════════════════════════ */
 .contacts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
   gap: 16px;
 }
 
@@ -1204,6 +1204,8 @@ textarea.form-input { resize: vertical; min-height: 90px; }
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
+  min-width: 0;
+  overflow: hidden;
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
@@ -1264,17 +1266,25 @@ textarea.form-input { resize: vertical; min-height: 90px; }
 
 .contact-actions {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   align-items: center;
-  padding-top: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
 }
-.contact-actions .btn { flex: 1; justify-content: center; }
+.contact-actions .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+  padding: 7px 10px;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
 .btn-delete {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px; height: 36px;
+  width: 34px; height: 34px;
   border-radius: var(--radius-pill);
   border: 1.5px solid var(--border);
   background: transparent;

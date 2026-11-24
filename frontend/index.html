@@ -298,11 +298,11 @@
                 </span>
                 <span class="badge badge-grey" id="voice-prewarm-badge" style="font-size:0.7rem;">Checking...</span>
               </div>
-              <div style="display:flex; gap:8px;">
-                <button class="btn btn-dark btn-sm" id="btn-prewarm-voice" style="flex:1; font-size:0.75rem; display:flex; align-items:center; justify-content:center; gap:6px;">
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                <button class="btn btn-dark btn-sm" id="btn-prewarm-voice" style="flex:1 1 130px; min-width:0; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap;">
                   <i data-lucide="zap"></i> <span id="btn-prewarm-label">Ready Cloned Voice</span>
                 </button>
-                <button class="btn btn-dark btn-sm" id="btn-preview-greeting" style="display:none; font-size:0.75rem;" title="Play pre-warmed greeting">
+                <button class="btn btn-dark btn-sm" id="btn-preview-greeting" style="display:none; flex:0 0 auto; font-size:0.74rem; padding:7px 10px; align-items:center; gap:5px; white-space:nowrap;" title="Play pre-warmed greeting">
                   <i data-lucide="volume-2"></i> Preview
                 </button>
               </div>
@@ -445,7 +445,7 @@
             </div>
           </div>
           <div class="pipeline-right">
-            <span class="model-tag" id="sim-model-tag"><i data-lucide="cpu"></i> Groq LLaMA / Chatterbox</span>
+            <span class="model-tag" id="sim-model-tag"><i data-lucide="cpu"></i> Groq LLaMA / F5-TTS</span>
           </div>
         </div>
 
@@ -525,11 +525,11 @@
                 <option value="hindi_female">Swara — Hindi Female (Studio)</option>
                 <option value="hindi_male">Madhur — Hindi Male (Studio)</option>
               </select>
-              <div class="sim-prewarm-row" style="display:flex; gap:8px; margin-top:10px; align-items:center;">
-                <button class="btn btn-dark btn-sm" id="btn-sim-prewarm" style="flex:1; font-size:0.75rem; display:flex; align-items:center; justify-content:center; gap:6px;">
+              <div class="sim-prewarm-row" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; align-items:stretch;">
+                <button class="btn btn-dark btn-sm" id="btn-sim-prewarm" style="flex:1 1 130px; min-width:0; font-size:0.74rem; padding:7px 10px; display:flex; align-items:center; justify-content:center; gap:5px; white-space:nowrap;">
                   <i data-lucide="zap"></i> <span id="btn-sim-prewarm-label">Re-Warm Selected Voice</span>
                 </button>
-                <button class="btn btn-outline btn-sm" id="btn-sim-preview-prewarm" style="display:none; font-size:0.75rem; padding:4px 10px; align-items:center; gap:4px;" title="Listen to pre-warmed greeting">
+                <button class="btn btn-outline btn-sm" id="btn-sim-preview-prewarm" style="display:none; flex:0 0 auto; font-size:0.74rem; padding:7px 10px; align-items:center; justify-content:center; gap:5px; white-space:nowrap;" title="Listen to selected voice preview">
                   <i data-lucide="volume-2"></i> Listen
                 </button>
               </div>

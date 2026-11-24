@@ -83,12 +83,13 @@ async def serve_tts_audio_file(filename: str):
     filepath = os.path.join(TTS_OUTPUT_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Audio file not found")
+    cache_hdr = "no-store, no-cache, must-revalidate" if filename.startswith("prewarmed_") else "public, max-age=3600"
     return FileResponse(
         filepath,
         media_type="audio/wav",
         headers={
             "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": cache_hdr,
             "ngrok-skip-browser-warning": "true",
         }
     )
@@ -498,27 +499,60 @@ async def synthesize_text(request: TTSRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {exc}")
 
 
+def _sync_active_voice_audio(audio_path: Optional[str]):
+    """Copy selected custom voice reference across runtime paths and clear stale caches."""
+    from backend import tts_engine
+    if audio_path and os.path.exists(audio_path):
+        config.REFERENCE_AUDIO_PATH = audio_path
+        targets = [
+            "voice_clone.mp3",
+            os.path.join(os.path.dirname(__file__), "voice_clone.mp3"),
+        ]
+        if os.path.isdir("/kaggle/working"):
+            targets.append("/kaggle/working/voice_clone.mp3")
+        for target in targets:
+            if os.path.abspath(audio_path) != os.path.abspath(target):
+                try:
+                    shutil.copyfile(audio_path, target)
+                except Exception:
+                    pass
+    tts_engine._cached_lux_prompt = None
+    tts_engine._cached_chatterbox_ref = None
+    for cf in ["voice_clone_lux_conds.pt", "voice_clone_conds.pt", "prewarmed_greeting.wav", "prewarmed_reprompt.wav", "prewarmed_goodbye.wav"]:
+        fp = os.path.join(TTS_OUTPUT_DIR, cf)
+        if os.path.exists(fp):
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
+
+
 @app.get("/api/tts/prewarm-status")
-def get_tts_prewarm_status():
+def get_tts_prewarm_status(db: Session = Depends(get_db)):
     """Check if the cloned voice engine is pre-warmed and ready on GPU."""
     from backend import tts_engine, config
     prewarmed_file = os.path.join(config.TTS_OUTPUT_DIR, "prewarmed_greeting.wav")
     is_ready = os.path.exists(prewarmed_file) and os.path.getsize(prewarmed_file) > 1000
     voice_status = get_voice_status()
+    active_v = db.query(models.Voice).filter(models.Voice.is_active == True).first()
     return {
         "ready": is_ready,
-        "greeting_url": "/tts_output/prewarmed_greeting.wav" if is_ready else None,
+        "greeting_url": (active_v.preview_url if active_v and active_v.preview_url else "/tts_output/prewarmed_greeting.wav") if is_ready else None,
         "model_loaded": getattr(tts_engine, "tts_model", None) is not None,
         "device": str(getattr(tts_engine, "_device", "none")),
         "has_voice_clone": voice_status["has_voice_clone"],
+        "active_voice_id": active_v.id if active_v else None,
+        "active_voice_name": active_v.name if active_v else None,
     }
 
 
 class TTSPrewarmRequest(BaseModel):
     engine: Optional[str] = None
+    voice_id: Optional[int] = None
+
 
 @app.post("/api/tts/prewarm")
-async def post_tts_prewarm(request: Request):
+async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
     """
     Pre-warms the voice cloning engine:
     1. Loads the selected TTS weights into GPU memory.
@@ -529,17 +563,26 @@ async def post_tts_prewarm(request: Request):
     import time
     t0 = time.time()
     from backend import tts_engine, config
-    voice_status = get_voice_status()
     req_engine = request.query_params.get("engine")
-    if not req_engine:
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                req_engine = body.get("engine")
-        except Exception:
-            pass
+    req_voice_id = request.query_params.get("voice_id")
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            req_engine = req_engine or body.get("engine")
+            req_voice_id = req_voice_id or body.get("voice_id")
+    except Exception:
+        pass
 
-    active_engine = (req_engine or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")).lower()
+    selected_voice = None
+    if req_voice_id:
+        try:
+            selected_voice = db.query(models.Voice).filter(models.Voice.id == int(req_voice_id)).first()
+        except Exception:
+            selected_voice = None
+    if not selected_voice:
+        selected_voice = db.query(models.Voice).filter(models.Voice.is_active == True).first()
+
+    active_engine = (req_engine or (selected_voice.engine if selected_voice else None) or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")).lower()
 
     indic_studio_profiles = {
         "kannada_female": ("sapna_greeting.wav", "kn-IN-SapnaNeural", "ನಮಸ್ಕಾರ, ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ! ನನ್ನ ಹೆಸರು ಸ್ವಪ್ನಾ.", "Sapna (Kannada Female Studio)"),
@@ -595,15 +638,21 @@ async def post_tts_prewarm(request: Request):
         }
 
     try:
+        ref_audio = None
+        if selected_voice and selected_voice.voice_type == "cloned" and selected_voice.audio_path and os.path.exists(selected_voice.audio_path):
+            ref_audio = selected_voice.audio_path
+            _sync_active_voice_audio(ref_audio)
         greeting_text = "Hello there! This is Alex calling from Vocalyx. How are you doing today?"
-        wav_path = tts_engine.prewarm_engine(greeting_text, engine=active_engine)
+        wav_path = tts_engine.prewarm_engine(greeting_text, engine=active_engine, reference_audio=ref_audio)
         elapsed = time.time() - t0
         return {
             "success": True,
             "ready": True,
             "greeting_url": "/tts_output/prewarmed_greeting.wav",
+            "voice_id": selected_voice.id if selected_voice else None,
+            "voice_name": selected_voice.name if selected_voice else None,
             "elapsed_seconds": round(elapsed, 2),
-            "message": f"Cloned voice ({active_engine}) pre-warmed in {elapsed:.1f}s. Audio is ready on server.",
+            "message": f"Cloned voice ({selected_voice.name if selected_voice else active_engine}) pre-warmed in {elapsed:.1f}s. Audio is ready on server.",
         }
     except Exception as exc:
         print(f"[TTS ERROR] /api/tts/prewarm failed: {exc}")
@@ -918,22 +967,10 @@ async def create_voice(request: CreateVoiceRequest, db: Session = Depends(get_db
     if request.activate_now:
         db.query(models.Voice).update({models.Voice.is_active: False})
         config.TWILIO_VOICE_ENGINE = new_voice.engine
-        if new_voice.audio_path and os.path.exists(new_voice.audio_path):
-            config.REFERENCE_AUDIO_PATH = new_voice.audio_path
-            try:
-                shutil.copyfile(new_voice.audio_path, "voice_clone.mp3")
-            except Exception:
-                pass
         try:
             from backend import tts_engine
-            tts_engine._cached_lux_prompt = None
-            tts_engine._cached_chatterbox_ref = None
-            for cf in ["voice_clone_lux_conds.pt", "voice_clone_conds.pt", "prewarmed_greeting.wav", "prewarmed_reprompt.wav", "prewarmed_goodbye.wav"]:
-                fp = os.path.join(TTS_OUTPUT_DIR, cf)
-                if os.path.exists(fp):
-                    try: os.remove(fp)
-                    except Exception: pass
-            tts_engine.prewarm_engine(engine=new_voice.engine)
+            _sync_active_voice_audio(new_voice.audio_path)
+            tts_engine.prewarm_engine(engine=new_voice.engine, reference_audio=new_voice.audio_path)
         except Exception as p_err:
             print(f"[Prewarm Error]: {p_err}")
 
@@ -962,23 +999,11 @@ async def activate_voice(voice_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     config.TWILIO_VOICE_ENGINE = voice.engine
-    if voice.audio_path and os.path.exists(voice.audio_path):
-        config.REFERENCE_AUDIO_PATH = voice.audio_path
-        try:
-            shutil.copyfile(voice.audio_path, "voice_clone.mp3")
-        except Exception:
-            pass
-
     try:
         from backend import tts_engine
-        tts_engine._cached_lux_prompt = None
-        tts_engine._cached_chatterbox_ref = None
-        for cf in ["voice_clone_lux_conds.pt", "voice_clone_conds.pt", "prewarmed_greeting.wav", "prewarmed_reprompt.wav", "prewarmed_goodbye.wav"]:
-            fp = os.path.join(TTS_OUTPUT_DIR, cf)
-            if os.path.exists(fp):
-                try: os.remove(fp)
-                except Exception: pass
-        tts_engine.prewarm_engine(engine=voice.engine)
+        ref_arg = voice.audio_path if voice.audio_path and os.path.exists(voice.audio_path) else None
+        _sync_active_voice_audio(ref_arg)
+        tts_engine.prewarm_engine(engine=voice.engine, reference_audio=ref_arg)
     except Exception as p_err:
         print(f"[Voice Activation Prewarm Note]: {p_err}")
 
