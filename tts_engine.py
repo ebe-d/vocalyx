@@ -530,13 +530,14 @@ def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
     timestamp = int(time.time() * 1000)
     output_path = os.path.join(TTS_OUTPUT_DIR, f"output_{timestamp}.wav")
 
+    nfe_steps = int(os.getenv("F5_NFE_STEP", "12") or "12")
     t0 = time.time()
     wav, sr, _ = model.infer(
         ref_file=ref_audio,
         ref_text=ref_text,
         gen_text=clean_text,
         file_wave=output_path,
-        nfe_step=16,
+        nfe_step=nfe_steps,
         cfg_strength=1.5,
         speed=1.0,
     )

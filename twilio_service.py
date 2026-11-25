@@ -424,11 +424,9 @@ def build_twiml(text: str, call_sid: str, base_url: str, wav_path: Optional[str]
         speech_timeout="auto",
         timeout=10,
         language=gather_lang,
+        action_on_empty_result=True,
     )
     response.append(gather)
-
-    # Fallback if caller is silent for 8s after audio finishes: redirect to respond webhook for reprompt
-    response.redirect(f"{public_url}/api/twilio/respond?call_sid={call_sid}&silence=1", method="POST")
 
     return str(response)
 

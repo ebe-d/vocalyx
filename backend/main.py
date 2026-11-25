@@ -1801,7 +1801,7 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
         return Response(content=twiml_xml, media_type="application/xml")
     except Exception as exc:
         print(f"[Twilio Voice Webhook Fallback]: {exc}")
-        safe_xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{base_url}/tts_output/prewarmed_greeting.wav</Play><Gather action="{base_url}/api/twilio/respond?call_sid={call_sid}" input="speech" method="POST" speechTimeout="auto" timeout="10"/><Redirect method="POST">{base_url}/api/twilio/respond?call_sid={call_sid}&amp;silence=1</Redirect></Response>'
+        safe_xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{base_url}/tts_output/prewarmed_greeting.wav</Play><Gather action="{base_url}/api/twilio/respond?call_sid={call_sid}" input="speech" method="POST" speechTimeout="auto" timeout="10" actionOnEmptyResult="true"/></Response>'
         return Response(content=safe_xml, media_type="application/xml")
 
 
@@ -2006,7 +2006,7 @@ async def twilio_respond_webhook(request: Request):
                 (call_engine or "").lower() in ("f5tts", "f5-tts", "f5")
                 and getattr(tts_mod, "f5_model", None) is None
             )
-            deadline = t_req_start + (1.2 if model_cold else 3.4)
+            deadline = t_req_start + (1.5 if model_cold else 8.5)
             while not synth_future.done() and time.monotonic() < deadline:
                 await asyncio.sleep(0.08)
 
@@ -2036,8 +2036,7 @@ async def twilio_respond_webhook(request: Request):
         public_url = twilio_service.resolve_base_url(base_url)
         vr = VoiceResponse()
         vr.play(f"{public_url}/tts_output/prewarmed_reprompt.wav")
-        vr.append(Gather(input="speech", action=f"{public_url}/api/twilio/respond?call_sid={call_sid}", method="POST", speech_timeout="auto", timeout=10))
-        vr.redirect(f"{public_url}/api/twilio/respond?call_sid={call_sid}&silence=1", method="POST")
+        vr.append(Gather(input="speech", action=f"{public_url}/api/twilio/respond?call_sid={call_sid}", method="POST", speech_timeout="auto", timeout=10, action_on_empty_result=True))
         return Response(content=str(vr), media_type="application/xml")
 
 
@@ -2068,9 +2067,9 @@ async def twilio_continue_webhook(request: Request):
     synth_key = f"{call_sid}:{turn_id}" if turn_id else call_sid
     pending_future = twilio_service.pending_synth_futures.get(synth_key) if turn_id else None
 
-    # Wait up to 3.2s per hop so every Twilio HTTP request returns well within Twilio/ngrok webhook limits
+    # Wait up to 7.0s per hop so almost any slow batch finishes in hop=1 well within Twilio's 15s timeout
     wav_path = None
-    for _ in range(16):
+    for _ in range(35):
         wav_path = twilio_service.pregenerated_audio.pop(synth_key, None)
         if not wav_path and not turn_id:
             wav_path = twilio_service.pregenerated_audio.pop(call_sid, None)
@@ -2094,9 +2093,9 @@ async def twilio_continue_webhook(request: Request):
         f"wav_ready={bool(wav_path)} future_done={pending_future.done() if pending_future else 'none'}"
     )
 
-    if (not wav_path or not os.path.exists(wav_path)) and hop < 4 and pending_future is not None and not pending_future.done():
+    if (not wav_path or not os.path.exists(wav_path)) and hop < 3 and pending_future is not None and not pending_future.done():
         public_url = twilio_service.resolve_base_url(base_url)
-        handoff_xml = _build_continue_twiml(public_url, call_sid, turn_id, hop=hop + 1, pause_len=2)
+        handoff_xml = _build_continue_twiml(public_url, call_sid, turn_id, hop=hop + 1, pause_len=3)
         return Response(content=handoff_xml, media_type="application/xml")
 
     if turn_id:

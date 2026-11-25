@@ -201,7 +201,7 @@ def get_chat_response(
         "Never say or imply that you are an AI, a robot, an assistant, or a language model. "
         "Speak in a natural, polite, composed, and formal business tone. "
         "Do not use exclamation marks, hyperactive enthusiasm, sales hype, or casual slang. "
-        f"Keep your response to 1 to 2 clear, concise spoken sentences (under 35 words) so it sounds like a poised human speaking over the phone.{lang_instruction}",
+        f"Keep your response to 1 short, crisp spoken sentence (under 22 words whenever possible) so it sounds natural and responsive over the phone.{lang_instruction}",
     ]
 
     # Active call script & live caller status/context (highest operational priority)
