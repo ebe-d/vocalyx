@@ -1572,7 +1572,14 @@ def test_alert_channel(req: AlertTestRequest):
             to_phone=req.to_phone,
             from_phone=req.from_phone,
             content_sid=req.content_sid,
-            template_vars={"1": "Alex Smith (Test) — Score 92/100 (Positive, Interested)", "2": "Vocalyx Test Alert"},
+            template_vars={
+                "1": "Alex Smith (Test) — Score 92/100 (Positive, Interested): Test verification alert from Vocalyx Message Alerts console.",
+                "2": "Score 92/100 (Positive) — Interested",
+                "contact": "Alex Smith (Test)",
+                "outcome": "Interested",
+                "summary": "Test verification alert from Vocalyx Message Alerts console.",
+                "marker": "Alex Smith",
+            },
         )
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported alert channel '{req.channel}'")

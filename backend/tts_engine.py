@@ -241,16 +241,16 @@ def _synthesize_luxtts(text: str, reference_audio: str = None) -> str:
     else:
         prompt_to_pass = prompt_dict
 
-    # Clean text: remove markdown symbols, brackets, URLs
+    # Clean text: preserve expressiveness (! and ?) while removing markdown/URLs
     clean_text = re.sub(r'[*_#`~\[\]()]', ' ', text)
     clean_text = re.sub(r'https?://\S+', '', clean_text)
-    clean_text = clean_text.replace('!', '.')
     clean_text = re.sub(r'\.{2,}', '.', clean_text)
+    clean_text = re.sub(r'!{2,}', '!', clean_text)
     clean_text = re.sub(r'\?{2,}', '?', clean_text)
-    clean_text = re.sub(r'[-—]+', ', ', clean_text)
+    clean_text = re.sub(r'[—–]+', ', ', clean_text)
     clean_text = re.sub(r'\s+', ' ', clean_text).strip()
     if not clean_text:
-        clean_text = text.strip() or "Hello"
+        clean_text = text.strip() or "Hello!"
 
     t0 = time.time()
     final_wav = model.generate_speech(
@@ -575,7 +575,7 @@ def _prepare_clean_f5_reference(ref_audio: str) -> str:
 
     os.makedirs(TTS_OUTPUT_DIR, exist_ok=True)
     st = os.stat(ref_audio)
-    sig = f"{os.path.abspath(ref_audio)}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8")
+    sig = f"v2|{os.path.abspath(ref_audio)}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8")
     h = hashlib.sha1(sig).hexdigest()[:12]
     trimmed_path = os.path.join(TTS_OUTPUT_DIR, f"ref_{h}.wav")
     if os.path.exists(trimmed_path) and os.path.getsize(trimmed_path) > 1000:
@@ -599,6 +599,12 @@ def _prepare_clean_f5_reference(ref_audio: str) -> str:
         # Skip initial mic-silence if speech begins early
         if sil_ends and sil_ends[0] <= 1.2:
             start_sec = max(0.0, sil_ends[0] - 0.1)
+        # For long multi-phrase recordings (>18s), skip a short initial mic-check phrase
+        # (e.g. "check one two three") if a clear pause occurs before 3.5s and plenty of clean speech follows
+        if dur > 18.0 and len(sil_ends) >= 2 and sil_ends[1] <= 3.5:
+            cand_start = max(0.0, sil_ends[1] - 0.1)
+            if any(4.5 <= (ss - cand_start) <= 9.8 for ss in sil_starts):
+                start_sec = cand_start
         # Pick the latest pause whose segment duration stays <= 9.8s (min 4.5s speech)
         best_end = None
         for s_start in sil_starts:
@@ -660,9 +666,9 @@ def _ensure_f5_ref_transcript(model, ref_audio: str) -> str:
 
 
 def _normalize_for_f5tts(text: str) -> str:
-    """Normalize punctuation, unicode whitespace, and shorthand so F5-TTS annunciates cleanly."""
+    """Normalize unicode whitespace and shorthand while preserving ?, !, and comma prosody."""
     t = text or ""
-    # Replace non-breaking / narrow spaces (e.g. '1\u202fp.m.') and curly punctuation
+    # Replace non-breaking / narrow spaces (e.g. '1\u202fp.m.') and curly quotes
     t = t.replace("\u202f", " ").replace("\u00a0", " ").replace("\u200b", "")
     t = t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
     t = t.replace("—", ", ").replace("–", ", ").replace(";", ",")
@@ -674,9 +680,13 @@ def _normalize_for_f5tts(text: str) -> str:
     t = re.sub(r"\b(\d{1,2})\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 A M", t)
     t = re.sub(r"\b(\d{1,2})\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 P M", t)
     t = t.replace("%", " percent").replace("&", " and ")
-    t = t.replace("!", ".")
+    t = re.sub(r"!{2,}", "!", t)
+    t = re.sub(r"\?{2,}", "?", t)
+    t = re.sub(r"\.{3,}", "...", t)
+    t = re.sub(r"\s+([,?!.])", r"\1", t)
+    t = re.sub(r"([,?!])(?=[^\s\"',?!.])", r"\1 ", t)
     t = re.sub(r"\s{2,}", " ", t).strip()
-    return t or "Hello."
+    return t or "Hello!"
 
 
 def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
@@ -692,6 +702,8 @@ def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
     output_path = os.path.join(TTS_OUTPUT_DIR, f"output_{timestamp}.wav")
 
     nfe_steps = int(os.getenv("F5_NFE_STEP", "16") or "16")
+    # 1.7 balances clear pronunciation with lively pitch inflection (? / !) vs rigid 2.0
+    cfg_strength = float(os.getenv("F5_CFG_STRENGTH", "1.7") or "1.7")
     t0 = time.time()
     wav, sr, _ = model.infer(
         ref_file=ref_audio,
@@ -699,7 +711,9 @@ def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
         gen_text=clean_text,
         file_wave=output_path,
         nfe_step=nfe_steps,
-        cfg_strength=2.0,
+        cfg_strength=cfg_strength,
+        sway_sampling_coef=-1.0,
+        cross_fade_duration=0.15,
         speed=1.0,
     )
     gen_duration = time.time() - t0

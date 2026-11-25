@@ -405,27 +405,71 @@ def send_whatsapp(
                 resolved_content_sid, auto_err = _ensure_whatsapp_template(client, clean_from=clean_from)
 
             if resolved_content_sid:
-                compact_text = re.sub(r"\s+", " ", text.replace("*", "")).strip()[:800]
-                vars_payload = {
-                    str(k): re.sub(r"\s+", " ", str(v)).strip()[:240]
-                    for k, v in (template_vars or {}).items()
-                    if v is not None
-                }
-                vars_payload.setdefault("1", compact_text)
-                vars_payload.setdefault("2", "Vocalyx Call Alert")
-                attempts = [vars_payload, {"1": compact_text[:240] or "Vocalyx Call Alert"}, None]
+                compact_text = re.sub(r"\s+", " ", text.replace("*", "")).strip()[:900]
+                t_vars = template_vars or {}
+                v_summary = re.sub(r"\s+", " ", str(t_vars.get("1") or compact_text)).strip()
+                v_meta = re.sub(r"\s+", " ", str(t_vars.get("2") or "Vocalyx Call Alert")).strip()
+                v_outcome = re.sub(r"\s+", " ", str(t_vars.get("outcome") or t_vars.get("2") or "Follow-up")).strip()
+                v_contact = re.sub(r"\s+", " ", str(t_vars.get("contact") or "Caller")).strip()
+                v_body_short = re.sub(r"\s+", " ", str(t_vars.get("summary") or compact_text)).strip()
+
+                # Try 2-var, 1-var, 4-var, and 3-var Content Template bindings; NEVER send None (empty vars)
+                single_body = compact_text if (len(compact_text) >= len(v_summary) and v_contact.lower() in compact_text.lower()) else v_summary
+                attempts = [
+                    {"1": single_body[:850], "2": v_meta[:180]},
+                    {"1": single_body[:850]},
+                    {"1": single_body[:240], "2": v_meta[:120]},
+                    {"1": single_body[:240] or "Vocalyx Call Alert"},
+                    {
+                        "1": v_contact[:80],
+                        "2": v_meta[:120],
+                        "3": v_outcome[:80],
+                        "4": v_body_short[:240],
+                    },
+                    {
+                        "1": v_contact[:80],
+                        "2": v_meta[:120],
+                        "3": v_body_short[:300],
+                    },
+                ]
                 last_tpl_exc = None
                 for cv in attempts:
                     try:
-                        kwargs = {
-                            "from_": clean_from,
-                            "to": clean_to,
-                            "content_sid": resolved_content_sid,
-                        }
-                        if cv is not None:
-                            kwargs["content_variables"] = json.dumps(cv)
-                        message = client.messages.create(**kwargs)
-                        return True, f"WhatsApp alert sent via template {resolved_content_sid} (SID: {message.sid})"
+                        message = client.messages.create(
+                            from_=clean_from,
+                            to=clean_to,
+                            content_sid=resolved_content_sid,
+                            content_variables=json.dumps(cv),
+                        )
+                        rendered_body = (getattr(message, "body", None) or "").strip()
+                        if not rendered_body and getattr(message, "sid", None):
+                            try:
+                                fetched = client.messages(message.sid).fetch()
+                                rendered_body = (getattr(fetched, "body", None) or "").strip()
+                            except Exception:
+                                pass
+
+                        # Verify Twilio actually injected our call summary rather than sending a static canned Trial message
+                        markers = []
+                        for m_cand in (v_contact, t_vars.get("marker"), v_body_short[:32]):
+                            if m_cand:
+                                for tok in re.findall(r"[A-Za-z0-9]{4,}", str(m_cand)):
+                                    if tok.lower() not in ("caller", "vocalyx", "unknown", "phone", "contact", "alert", "score"):
+                                        markers.append(tok)
+                        if rendered_body and markers and not any(tok.lower() in rendered_body.lower() for tok in markers):
+                            print(
+                                f"[Alerts WhatsApp WARNING] Template {resolved_content_sid} delivered static canned text "
+                                f"without call summary: {rendered_body!r}"
+                            )
+                            return (
+                                False,
+                                f"Twilio delivered a static canned message ('{rendered_body[:90]}') instead of your call summary "
+                                f"because Content Template {resolved_content_sid} has no custom summary placeholders and Trial accounts block free-form/Content API. "
+                                f"Use a Content Template with {{{{1}}}} variable (paid Twilio auto-creates 'Vocalyx Alert: {{{{1}}}}'), or use SMS/Telegram for full summaries.",
+                            )
+
+                        preview = f": {rendered_body[:160]}" if rendered_body else ""
+                        return True, f"WhatsApp alert sent via template {resolved_content_sid} (SID: {message.sid}){preview}"
                     except Exception as tpl_exc:
                         last_tpl_exc = tpl_exc
                         msg_l = str(tpl_exc).lower()
@@ -508,9 +552,16 @@ def send_all_alerts_detailed(
 
     # 3. WhatsApp (Twilio)
     if results["whatsapp"]["enabled"]:
+        summary_full = f"{contact_name} — Score {lead_score}/100 ({sentiment}, {outcome}): {summary}".strip()
+        if reasoning:
+            summary_full = f"{summary_full} | Note: {reasoning}".strip()
         wa_vars = {
-            "1": f"{contact_name} — Score {lead_score}/100 ({sentiment}, {outcome}): {summary}".strip()[:950],
-            "2": str(outcome or "Vocalyx Call Alert")[:120],
+            "1": summary_full[:850],
+            "2": f"Score {lead_score}/100 ({sentiment}) — {outcome}"[:180],
+            "contact": contact_name,
+            "outcome": outcome,
+            "summary": summary or reasoning or summary_full,
+            "marker": contact_name,
         }
         ok, res = send_whatsapp(msg_md, template_vars=wa_vars)
         results["whatsapp"]["ok"] = ok

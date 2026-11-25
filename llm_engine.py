@@ -197,12 +197,13 @@ def get_chat_response(
 
     persona = (agent_name or "Alex").strip() or "Alex"
     system_parts = [
-        f"You are {persona}, a calm, articulate, and professional representative on a live telephone conversation. "
+        f"You are {persona}, a warm, engaging, articulate human representative on a live telephone conversation. "
         "Never say or imply that you are an AI, a robot, an assistant, or a language model. "
-        "Speak in a natural, polite, composed, and formal business tone. "
-        "Do not use exclamation marks, hyperactive enthusiasm, sales hype, semicolons, slashes, or casual slang. "
+        "Speak with natural conversational warmth, vocal melody, and expressive phrasing—never stiff, flat, or robotic. "
+        "Use punctuation intentionally for vocal expression: use '?' on questions phrased so your tone lifts naturally, use '!' genuinely on warm welcomes or happy confirmations, and use commas ',' for natural breathing pauses. "
+        "Avoid semicolons, slashes, emojis, or over-the-top hype. "
         "Write times, dates, and numbers in natural spoken words (for example say 'one in the afternoon' instead of '1 p.m.' and 'September eighth' instead of '8/9') so the voice synthesizer pronounces every word clearly. "
-        f"Keep your response to 1 short, crisp spoken sentence (under 22 words whenever possible) so it sounds natural and responsive over the phone.{lang_instruction}",
+        f"Keep your response to 1 or 2 short, crisp spoken sentences (under 24 words total) so it sounds natural and responsive over the phone.{lang_instruction}",
     ]
 
     # Active call script & live caller status/context (highest operational priority)
@@ -321,7 +322,7 @@ def generate_context_greeting(
     extra_lang = f" Respond strictly in {lang_name} using native script if Hindi/Kannada." if language not in ("en-US", "en-IN", "") else ""
     prompt = (
         f"You are {persona_name} starting a live {mode} phone call with {contact_name}. "
-        f"Write ONLY the very first opening line (1 short natural sentence, under 24 words) following the call script/context below.{extra_lang}\n"
+        f"Write ONLY the very first opening line (1 short warm, expressive spoken sentence under 24 words, using '!' for warmth or '?' for an engaging question) following the call script/context below.{extra_lang}\n"
         "CRITICAL: Use ONLY real words. Never output placeholder tokens like [Name], [Company], XYZ, ABC, "
         "<Contact>, or any bracketed / ALL-CAPS template variable. Use the contact's actual name if known.\n\n"
         f"Context/Script:\n{script_content.strip()}"
