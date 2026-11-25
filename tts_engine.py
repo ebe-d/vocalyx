@@ -7,6 +7,8 @@ import os
 import sys
 import time
 import re
+import threading
+from contextlib import contextmanager
 import torch
 import torchaudio
 
@@ -45,6 +47,51 @@ _cached_lux_prompt = None
 chatterbox_model = None
 _cached_chatterbox_ref = None
 _device = None
+_tts_init_lock = threading.Lock()
+_tts_infer_lock = threading.Lock()
+
+
+@contextmanager
+def _safe_transformers_load():
+    """
+    Prevent transformers / accelerate from leaving tied Whisper weights (proj_out.weight)
+    on PyTorch's 'meta' device (which causes 'Cannot copy out of meta tensor; no data!').
+    Thread-safe inside _tts_init_lock / _tts_infer_lock.
+    """
+    orig_from_pretrained = None
+    ptm_cls = None
+    try:
+        from transformers.modeling_utils import PreTrainedModel
+        ptm_cls = PreTrainedModel
+        orig_from_pretrained = PreTrainedModel.__dict__.get("from_pretrained")
+        orig_fn = getattr(PreTrainedModel.from_pretrained, "__func__", None)
+        if orig_fn is not None:
+            @classmethod
+            def _patched_from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+                kwargs["low_cpu_mem_usage"] = False
+                if kwargs.get("device_map") == "auto":
+                    kwargs.pop("device_map", None)
+                return orig_fn(cls, pretrained_model_name_or_path, *model_args, **kwargs)
+            PreTrainedModel.from_pretrained = _patched_from_pretrained
+    except Exception:
+        ptm_cls = None
+        orig_from_pretrained = None
+    try:
+        yield
+    finally:
+        if ptm_cls is not None and orig_from_pretrained is not None:
+            try:
+                setattr(ptm_cls, "from_pretrained", orig_from_pretrained)
+            except Exception:
+                pass
+
+
+def _infer_fallback_voice_type(reference_audio: str = None, engine_preference: str = "") -> str:
+    """Match fallback Edge-TTS gender to the selected voice instead of forcing female for Alex."""
+    combined = f"{engine_preference or ''} {reference_audio or ''}".lower()
+    if any(k in combined for k in ("female", "woman", "joanna", "sarah", "jenny", "sapna", "swara")):
+        return "female"
+    return "male"
 
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
@@ -102,55 +149,61 @@ def _resolve_reference_audio(reference_audio: str = None) -> str:
 # LuxTTS Engine (~150x real-time, ~0.15s - 0.25s latency)
 # ---------------------------------------------------------------------------
 def get_luxtts_model():
-    """Lazily load LuxTTS model and pre-encode reference voice."""
+    """Lazily load LuxTTS model and pre-encode reference voice (thread-safe)."""
     global lux_model, _cached_lux_prompt, _device
     if lux_model is not None:
         return lux_model
 
-    for p in ["/kaggle/working/LuxTTS", "LuxTTS", os.path.join(_BASE_DIR, "..", "LuxTTS")]:
-        if os.path.exists(p) and os.path.abspath(p) not in sys.path:
-            sys.path.insert(0, os.path.abspath(p))
+    with _tts_init_lock:
+        if lux_model is not None:
+            return lux_model
 
-    from zipvoice.luxvoice import LuxTTS
+        for p in ["/kaggle/working/LuxTTS", "LuxTTS", os.path.join(_BASE_DIR, "..", "LuxTTS")]:
+            if os.path.exists(p) and os.path.abspath(p) not in sys.path:
+                sys.path.insert(0, os.path.abspath(p))
 
-    device_to_use = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[TTS] Initializing LuxTTS on {device_to_use}...")
-    t0 = time.time()
-    lux_model = LuxTTS(device=device_to_use)
-    _device = device_to_use
-    print(f"[TTS] ✓ LuxTTS model loaded into {device_to_use} in {time.time() - t0:.2f}s")
+        from zipvoice.luxvoice import LuxTTS
 
-    # Locate reference voice audio
-    ref_audio = _resolve_reference_audio()
-    cached_prompt_file = os.path.join(TTS_OUTPUT_DIR, "voice_clone_lux_conds.pt")
+        device_to_use = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[TTS] Initializing LuxTTS on {device_to_use}...")
+        t0 = time.time()
+        with _safe_transformers_load():
+            lux_model = LuxTTS(device=device_to_use)
+        _device = device_to_use
+        print(f"[TTS] ✓ LuxTTS model loaded into {device_to_use} in {time.time() - t0:.2f}s")
 
-    # Try loading cached prompt from disk (instant 0.01s)
-    if os.path.exists(cached_prompt_file) and os.path.getsize(cached_prompt_file) > 1000:
-        try:
+        # Locate reference voice audio
+        ref_audio = _resolve_reference_audio()
+        cached_prompt_file = os.path.join(TTS_OUTPUT_DIR, "voice_clone_lux_conds.pt")
+
+        # Try loading cached prompt from disk (instant 0.01s)
+        if os.path.exists(cached_prompt_file) and os.path.getsize(cached_prompt_file) > 1000:
             try:
-                _cached_lux_prompt = torch.load(cached_prompt_file, map_location=device_to_use, weights_only=False)
-            except TypeError:
-                _cached_lux_prompt = torch.load(cached_prompt_file, map_location=device_to_use)
-            if isinstance(_cached_lux_prompt, dict):
-                for k, v in _cached_lux_prompt.items():
-                    if isinstance(v, torch.Tensor):
-                        _cached_lux_prompt[k] = v.to(lux_model.device)
-                print(f"[TTS] ✓ Loaded pre-computed LuxTTS voice prompt from {cached_prompt_file} in 0.01s!")
-                return lux_model
-        except Exception as _cpe:
-            print(f"[TTS] Prompt cache load note: {_cpe}")
+                try:
+                    _cached_lux_prompt = torch.load(cached_prompt_file, map_location=device_to_use, weights_only=False)
+                except TypeError:
+                    _cached_lux_prompt = torch.load(cached_prompt_file, map_location=device_to_use)
+                if isinstance(_cached_lux_prompt, dict):
+                    for k, v in _cached_lux_prompt.items():
+                        if isinstance(v, torch.Tensor):
+                            _cached_lux_prompt[k] = v.to(lux_model.device)
+                    print(f"[TTS] ✓ Loaded pre-computed LuxTTS voice prompt from {cached_prompt_file} in 0.01s!")
+                    return lux_model
+            except Exception as _cpe:
+                print(f"[TTS] Prompt cache load note: {_cpe}")
 
-    if ref_audio and os.path.exists(ref_audio):
-        print(f"[TTS] Encoding reference voice '{ref_audio}' for LuxTTS...")
-        t_enc = time.time()
-        _cached_lux_prompt = lux_model.encode_prompt(ref_audio, duration=5, rms=0.01)
-        print(f"[TTS] ✓ Reference voice prompt encoded in {time.time() - t_enc:.2f}s")
-        try:
-            os.makedirs(TTS_OUTPUT_DIR, exist_ok=True)
-            torch.save(_cached_lux_prompt, cached_prompt_file)
-            print(f"[TTS] ✓ Cached LuxTTS voice prompt to {cached_prompt_file}")
-        except Exception as _se:
-            print(f"[TTS] Prompt cache save note: {_se}")
+        if ref_audio and os.path.exists(ref_audio):
+            print(f"[TTS] Encoding reference voice '{ref_audio}' for LuxTTS...")
+            t_enc = time.time()
+            with _safe_transformers_load():
+                _cached_lux_prompt = lux_model.encode_prompt(ref_audio, duration=5, rms=0.01)
+            print(f"[TTS] ✓ Reference voice prompt encoded in {time.time() - t_enc:.2f}s")
+            try:
+                os.makedirs(TTS_OUTPUT_DIR, exist_ok=True)
+                torch.save(_cached_lux_prompt, cached_prompt_file)
+                print(f"[TTS] ✓ Cached LuxTTS voice prompt to {cached_prompt_file}")
+            except Exception as _se:
+                print(f"[TTS] Prompt cache save note: {_se}")
 
     return lux_model
 
@@ -220,12 +273,14 @@ def _synthesize_luxtts(text: str, reference_audio: str = None) -> str:
         ref_path = _resolve_reference_audio(reference_audio)
         if prompt_dict is None or ref_path != _resolve_reference_audio():
             print(f"[TTS] Encoding custom reference audio '{ref_path}'...")
-            prompt_dict = model.encode_prompt(ref_path, duration=5, rms=0.01)
+            with _tts_init_lock, _safe_transformers_load():
+                prompt_dict = model.encode_prompt(ref_path, duration=5, rms=0.01)
     elif prompt_dict is None:
         ref_path = _resolve_reference_audio()
         if ref_path and os.path.exists(ref_path):
             print(f"[TTS] Encoding reference audio '{ref_path}' for LuxTTS...")
-            prompt_dict = model.encode_prompt(ref_path, duration=5, rms=0.01)
+            with _tts_init_lock, _safe_transformers_load():
+                prompt_dict = model.encode_prompt(ref_path, duration=5, rms=0.01)
 
     if prompt_dict is None:
         raise RuntimeError("No reference audio prompt available for LuxTTS voice cloning.")
@@ -477,19 +532,19 @@ def _synthesize_chatterbox(text: str, reference_audio: str = None, exaggeration:
 f5_model = None
 
 
-def prewarm_model(engine: str = None, reference_audio: str = None) -> None:
+def prewarm_model(engine: str = None, reference_audio: str = None, delay_seconds: float = 0.0) -> None:
     """
     Pre-load the active TTS model (F5-TTS / LuxTTS) and warm the default
     reference transcript cache in a background daemon thread at server startup.
-    Prevents the first live call from waiting 15-30s for model + Whisper load.
+    Serialized via _tts_init_lock so concurrent requests never double-load on GPU.
     """
-    import threading
-
     cfg_engine = getattr(config, "TWILIO_VOICE_ENGINE", None) if config else None
     target = (engine or cfg_engine or os.getenv("TTS_ENGINE", "f5tts")).lower()
 
     def _load():
         try:
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
             t0 = time.time()
             if target in ("f5tts", "f5-tts", "f5"):
                 model = get_f5_model()
@@ -512,31 +567,36 @@ def prewarm_model(engine: str = None, reference_audio: str = None) -> None:
 
 
 def get_f5_model():
-    """Lazily load F5-TTS model inside active GPU context."""
+    """Lazily load F5-TTS model inside active GPU context (thread-safe singleton)."""
     global f5_model
     if f5_model is not None:
         return f5_model
 
-    device_to_use = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[TTS F5-TTS] Initializing F5-TTS on {device_to_use}...")
-    t0 = time.time()
-    try:
-        from f5_tts.api import F5TTS
-    except ImportError:
-        print("[TTS F5-TTS] ⚡ f5-tts package missing from environment, auto-installing now...")
-        import subprocess
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "f5-tts"])
-            from f5_tts.api import F5TTS
-        except Exception as _install_err:
-            raise RuntimeError(f"F5-TTS auto-install failed: {_install_err}") from _install_err
+    with _tts_init_lock:
+        if f5_model is not None:
+            return f5_model
 
-    try:
-        f5_model = F5TTS(model="F5TTS_v1_Base", device=device_to_use)
-        print(f"[TTS F5-TTS] ✓ F5-TTS model loaded in {time.time() - t0:.2f}s")
-        return f5_model
-    except Exception as _f5_err:
-        raise RuntimeError(f"F5-TTS load failed: {_f5_err}") from _f5_err
+        device_to_use = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[TTS F5-TTS] Initializing F5-TTS on {device_to_use}...")
+        t0 = time.time()
+        try:
+            from f5_tts.api import F5TTS
+        except ImportError:
+            print("[TTS F5-TTS] ⚡ f5-tts package missing from environment, auto-installing now...")
+            import subprocess
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "f5-tts"])
+                from f5_tts.api import F5TTS
+            except Exception as _install_err:
+                raise RuntimeError(f"F5-TTS auto-install failed: {_install_err}") from _install_err
+
+        try:
+            with _safe_transformers_load():
+                f5_model = F5TTS(model="F5TTS_v1_Base", device=device_to_use)
+            print(f"[TTS F5-TTS] ✓ F5-TTS model loaded in {time.time() - t0:.2f}s")
+            return f5_model
+        except Exception as _f5_err:
+            raise RuntimeError(f"F5-TTS load failed: {_f5_err}") from _f5_err
 
 
 def _get_audio_duration(audio_path: str) -> float:
@@ -634,7 +694,7 @@ def _prepare_clean_f5_reference(ref_audio: str) -> str:
 
 
 def _ensure_f5_ref_transcript(model, ref_audio: str) -> str:
-    """Load or generate & cache sidecar .txt for *ref_audio* so Whisper never re-runs on live calls."""
+    """Load or generate & cache sidecar .txt for *ref_audio* without triggering meta-tensor crashes."""
     if not ref_audio or not os.path.exists(ref_audio):
         return ""
     ref_txt_path = os.path.splitext(ref_audio)[0] + ".txt"
@@ -646,17 +706,69 @@ def _ensure_f5_ref_transcript(model, ref_audio: str) -> str:
                 return cached
         except Exception:
             pass
-    if model is not None and hasattr(model, "transcribe"):
+
+    txt = ""
+    with _tts_infer_lock, _safe_transformers_load():
+        # Re-check disk cache once lock is held in case another thread just finished transcribing
+        if os.path.exists(ref_txt_path):
+            try:
+                with open(ref_txt_path, "r", encoding="utf-8") as f:
+                    cached = f.read().strip()
+                if cached:
+                    return cached
+            except Exception:
+                pass
+
+        # Attempt 1: Safe standalone HuggingFace Whisper pipeline with low_cpu_mem_usage=False
+        # (prevents transformers v5 proj_out.weight meta-tensor errors inside f5_tts.transcribe)
         try:
-            txt = (model.transcribe(ref_audio) or "").strip()
-            if txt:
-                with open(ref_txt_path, "w", encoding="utf-8") as f:
-                    f.write(txt)
-                print(f"[TTS F5-TTS] Cached ref transcript to {os.path.basename(ref_txt_path)}: '{txt[:60]}'")
-                return txt
-        except Exception as _te:
-            print(f"[TTS F5-TTS] Ref transcribe cache note: {_te}")
-    return ""
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline as hf_pipeline
+            combos = (
+                [("openai/whisper-large-v3-turbo", "cuda"), ("openai/whisper-large-v3-turbo", "cpu"), ("openai/whisper-base", "cpu")]
+                if torch.cuda.is_available()
+                else [("openai/whisper-large-v3-turbo", "cpu"), ("openai/whisper-base", "cpu")]
+            )
+            for w_model_id, w_dev in combos:
+                try:
+                    w_mod = AutoModelForSpeechSeq2Seq.from_pretrained(
+                        w_model_id,
+                        low_cpu_mem_usage=False,
+                    )
+                    if w_dev == "cuda":
+                        w_mod = w_mod.to("cuda")
+                    proc = AutoProcessor.from_pretrained(w_model_id)
+                    asr = hf_pipeline(
+                        "automatic-speech-recognition",
+                        model=w_mod,
+                        tokenizer=proc.tokenizer,
+                        feature_extractor=proc.feature_extractor,
+                        device=0 if w_dev == "cuda" else -1,
+                    )
+                    res = asr(ref_audio, chunk_length_s=30)
+                    cand = (res.get("text") if isinstance(res, dict) else str(res) or "").strip()
+                    if cand:
+                        txt = cand
+                        break
+                except Exception as _w_err:
+                    print(f"[TTS F5-TTS] Safe Whisper note ({w_model_id}@{w_dev}): {_w_err}")
+        except Exception as _imp_err:
+            print(f"[TTS F5-TTS] Safe Whisper setup note: {_imp_err}")
+
+        # Attempt 2: Native model.transcribe with patched from_pretrained & clean asr_pipe
+        if not txt and model is not None and hasattr(model, "transcribe"):
+            try:
+                txt = (model.transcribe(ref_audio) or "").strip()
+            except Exception as _te:
+                print(f"[TTS F5-TTS] Ref transcribe cache note: {_te}")
+
+    if txt:
+        try:
+            with open(ref_txt_path, "w", encoding="utf-8") as f:
+                f.write(txt)
+            print(f"[TTS F5-TTS] Cached ref transcript to {os.path.basename(ref_txt_path)}: '{txt[:60]}'")
+        except Exception:
+            pass
+    return txt
 
 
 def _normalize_for_f5tts(text: str) -> str:
@@ -699,17 +811,18 @@ def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
     # Default 2.0 preserves normal, realistic pitch stability without weird warble
     cfg_strength = float(os.getenv("F5_CFG_STRENGTH", "2.0") or "2.0")
     t0 = time.time()
-    wav, sr, _ = model.infer(
-        ref_file=ref_audio,
-        ref_text=ref_text,
-        gen_text=clean_text,
-        file_wave=output_path,
-        nfe_step=nfe_steps,
-        cfg_strength=cfg_strength,
-        sway_sampling_coef=-1.0,
-        cross_fade_duration=0.15,
-        speed=1.0,
-    )
+    with _tts_infer_lock, _safe_transformers_load():
+        wav, sr, _ = model.infer(
+            ref_file=ref_audio,
+            ref_text=ref_text,
+            gen_text=clean_text,
+            file_wave=output_path,
+            nfe_step=nfe_steps,
+            cfg_strength=cfg_strength,
+            sway_sampling_coef=-1.0,
+            cross_fade_duration=0.15,
+            speed=1.0,
+        )
     gen_duration = time.time() - t0
     print(f"[TTS F5-TTS] ⚡ Generated speech in {gen_duration:.3f}s for '{clean_text[:40]}...'")
 
@@ -879,8 +992,9 @@ def synthesize(
             try:
                 return _synthesize_luxtts(text, reference_audio)
             except Exception as lux_err:
-                print(f"[TTS WARNING] LuxTTS fallback also failed: {lux_err}. Falling back to native Edge-TTS...")
-                return _synthesize_edge_tts(text, voice_type="female")
+                fb_gender = _infer_fallback_voice_type(reference_audio, engine_preference)
+                print(f"[TTS WARNING] LuxTTS fallback also failed: {lux_err}. Falling back to native Edge-TTS ({fb_gender})...")
+                return _synthesize_edge_tts(text, voice_type=fb_gender)
 
     if engine_preference in ["chatterbox", "turbo"]:
         # Legacy fallback - route cleanly to ultra-fast LuxTTS (or F5-TTS)
@@ -890,7 +1004,7 @@ def synthesize(
             try:
                 return _synthesize_f5tts(text, reference_audio)
             except Exception:
-                return _synthesize_edge_tts(text, voice_type="female")
+                return _synthesize_edge_tts(text, voice_type=_infer_fallback_voice_type(reference_audio, engine_preference))
 
     if engine_preference in ["luxtts", "lux"]:
         if is_kannada_script:
@@ -904,8 +1018,9 @@ def synthesize(
             try:
                 return _synthesize_f5tts(text, reference_audio)
             except Exception as f5_err:
-                print(f"[TTS WARNING] F5-TTS fallback also failed: {f5_err}. Falling back to native Edge-TTS...")
-                return _synthesize_edge_tts(text, voice_type="female")
+                fb_gender = _infer_fallback_voice_type(reference_audio, engine_preference)
+                print(f"[TTS WARNING] F5-TTS fallback also failed: {f5_err}. Falling back to native Edge-TTS ({fb_gender})...")
+                return _synthesize_edge_tts(text, voice_type=fb_gender)
 
     # Default fallback: try LuxTTS first, then F5-TTS, with native fallback for Indic scripts
     if is_kannada_script:
@@ -919,7 +1034,7 @@ def synthesize(
         try:
             return _synthesize_f5tts(text, reference_audio)
         except Exception:
-            return _synthesize_edge_tts(text, voice_type="female")
+            return _synthesize_edge_tts(text, voice_type=_infer_fallback_voice_type(reference_audio, engine_preference))
 
 
 def prewarm_engine(greeting_text: str = None, engine: str = None, reference_audio: str = None) -> str:

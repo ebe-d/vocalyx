@@ -88,10 +88,10 @@ async def startup():
         _rag.prewarm_embedder()
     except Exception as _rpe:
         print(f"[Startup] RAG prewarm note: {_rpe}")
-    # Pre-load TTS model in background so first call doesn't cold-start (F5-TTS takes ~15s to load)
+    # Pre-load TTS model after RAG embedder settles (3s delay prevents concurrent HuggingFace load races)
     try:
         from backend import tts_engine as _tts
-        _tts.prewarm_model()
+        _tts.prewarm_model(delay_seconds=3.0)
     except Exception as _tpe:
         print(f"[Startup] TTS model prewarm note: {_tpe}")
     # Seed default voices and sample script if the database is empty
