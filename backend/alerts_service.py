@@ -310,11 +310,32 @@ def _ensure_whatsapp_template(client, clean_from: str = "") -> Tuple[Optional[st
 
 
 def _diagnose_whatsapp_sandbox_window(client, clean_from: str, clean_to: str) -> str:
-    """Check Twilio account message history to pinpoint Sandbox/account mismatch issues."""
+    """Check Twilio account message history to pinpoint Sandbox/sender/account mismatch issues."""
     sid = getattr(client, "account_sid", "") or ""
     masked_sid = f"{sid[:6]}...{sid[-4:]}" if len(sid) > 10 else (sid or "unknown")
+    sandbox_from = "whatsapp:+14155238886"
+
+    if clean_from != sandbox_from:
+        sandbox_hint = ""
+        try:
+            sb_raw = client.messages.list(from_=clean_to, to=sandbox_from, limit=5)
+            sb_wa = [m for m in sb_raw if str(getattr(m, "to", "")).lower() == sandbox_from]
+            if sb_wa:
+                sb_dt = getattr(sb_wa[0], "date_sent", None) or getattr(sb_wa[0], "date_created", None)
+                sandbox_hint = f" (Account {masked_sid} DOES have an inbound WhatsApp message to {sandbox_from} at {sb_dt}.)"
+            else:
+                sandbox_hint = f" (Account {masked_sid} currently has 0 inbound WhatsApp messages to {sandbox_from}; send your 'join <code>' + 'hi' to {sandbox_from}.)"
+        except Exception:
+            pass
+        return (
+            f"Sender mismatch: 'Twilio WhatsApp Sender' is set to {clean_from} instead of Twilio Sandbox {sandbox_from}. "
+            f"Regular Twilio Voice/SMS numbers cannot send WhatsApp without Meta Business registration — "
+            f"change 'Twilio WhatsApp Sender' in Message Alerts back to {sandbox_from}.{sandbox_hint}"
+        )
+
     try:
-        inbound = client.messages.list(from_=clean_to, to=clean_from, limit=1)
+        raw_in = client.messages.list(from_=clean_to, to=clean_from, limit=5)
+        inbound = [m for m in raw_in if str(getattr(m, "to", "")).lower().startswith("whatsapp:")]
         if not inbound:
             return (
                 f"Twilio account {masked_sid} has 0 inbound WhatsApp messages from {clean_to} to {clean_from}. "
@@ -323,8 +344,9 @@ def _diagnose_whatsapp_sandbox_window(client, clean_from: str, clean_to: str) ->
             )
         last_dt = getattr(inbound[0], "date_sent", None) or getattr(inbound[0], "date_created", None)
         return (
-            f"Last inbound message to account {masked_sid} was at {last_dt}; if >24h ago, send 'hi' to {clean_from} to reopen the window, "
-            f"or paste your Sandbox Content Template SID (HX...) from Twilio Console -> Messaging -> Try it out -> Send a WhatsApp message."
+            f"Last inbound WhatsApp message to account {masked_sid} ({clean_from}) was at {last_dt}. "
+            f"If free-form still fails, paste your Sandbox Content Template SID (HX...) from "
+            f"Twilio Console -> Messaging -> Try it out -> Send a WhatsApp message into Alerts."
         )
     except Exception:
         return (
