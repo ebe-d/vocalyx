@@ -4,6 +4,7 @@ Provides conversational responses and post-call analysis.
 """
 import json
 import os
+from typing import Optional
 
 from groq import Groq
 
