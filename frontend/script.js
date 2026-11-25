@@ -63,6 +63,9 @@ const api = {
   getTwilioConfig:()     => api.get('/api/twilio/config'),
   updateTwilioConfig:(d) => api.post('/api/twilio/config', d),
   testTwilio:     ()     => api.post('/api/twilio/test'),
+  getLlmConfig:   ()     => api.get('/api/llm/config'),
+  updateLlmConfig:(d)    => api.post('/api/llm/config', d),
+  testLlm:        ()     => api.post('/api/llm/test'),
   dialPhone:      (d)    => api.post('/api/twilio/call', d, 30000),
   hangupPhone:    (call_sid) => api.post('/api/twilio/hangup', { call_sid }),
   getActivePhoneCall:(call_sid) => api.get(`/api/twilio/active-call${call_sid ? '?call_sid=' + call_sid : ''}`),
@@ -417,8 +420,17 @@ async function checkBackendHealth(url) {
           simulator.updateVoiceBadge();
         }
       }
+      if (typeof settings !== 'undefined' && settings._autoSyncMissingTokens) {
+        await settings._autoSyncMissingTokens(data);
+      }
+      if (typeof llmManager !== 'undefined' && llmManager.loadConfig) {
+        llmManager.loadConfig();
+      }
       if (typeof twilioManager !== 'undefined' && twilioManager.loadConfig) {
         twilioManager.loadConfig();
+      }
+      if (typeof alertsManager !== 'undefined' && alertsManager.loadConfig) {
+        alertsManager.loadConfig();
       }
       if (typeof voicePrewarmManager !== 'undefined' && voicePrewarmManager.checkStatus) {
         voicePrewarmManager.checkStatus();
@@ -868,8 +880,14 @@ const ui = {
     } else {
       updateStatusUI(false, 'Not connected');
     }
+    if (typeof llmManager !== 'undefined' && llmManager.loadConfig) {
+      llmManager.loadConfig();
+    }
     if (typeof twilioManager !== 'undefined' && twilioManager.loadConfig) {
       twilioManager.loadConfig();
+    }
+    if (typeof alertsManager !== 'undefined' && alertsManager.loadConfig) {
+      alertsManager.loadConfig();
     }
   },
 };
@@ -2218,6 +2236,8 @@ const contactModal = {
 
 /* ─── Settings Module ───────────────────────────────────────────── */
 const settings = {
+  _autoSyncedUrl: null,
+
   async connectBackend() {
     const inp = document.getElementById('backend-url-input');
     const url = inp?.value.trim();
@@ -2227,18 +2247,200 @@ const settings = {
     btn.disabled = true;
     btn.textContent = 'Connecting…';
 
+    this._autoSyncedUrl = null;
     const ok = await checkBackendHealth(url);
     if (ok) {
       localStorage.setItem(LS_KEY, url);
       api.base = url;
       toast.success('Backend connected!');
     } else {
-      toast.error('Could not reach backend. Verify your Hugging Face Space is active.');
+      toast.error('Could not reach backend. Verify your ngrok / server URL is active.');
     }
 
     btn.disabled = false;
     btn.innerHTML = `<i data-lucide="plug-zap"></i> Connect →`;
     lucide.createIcons({ nodes: [btn] });
+  },
+
+  async _autoSyncMissingTokens(healthData) {
+    const base = (api.base || '').replace(/\/$/, '');
+    if (!base || this._autoSyncedUrl === base) return;
+    this._autoSyncedUrl = base;
+    let synced = 0;
+
+    try {
+      const gRaw = localStorage.getItem('vocalyx_groq_config');
+      if (gRaw && healthData && !healthData.groq_configured) {
+        const g = JSON.parse(gRaw);
+        if (g.api_key) {
+          await api.updateLlmConfig({ api_key: g.api_key, model: g.model || 'openai/gpt-oss-20b' });
+          synced++;
+        }
+      }
+    } catch {}
+
+    try {
+      const tRaw = localStorage.getItem('vocalyx_twilio_config');
+      if (tRaw && healthData && !healthData.twilio_configured) {
+        const t = JSON.parse(tRaw);
+        if (t.sid && t.token && t.phone) {
+          await api.updateTwilioConfig({
+            account_sid: t.sid,
+            auth_token: t.token,
+            phone_number: t.phone,
+            public_base_url: api.base,
+          });
+          synced++;
+        }
+      }
+    } catch {}
+
+    try {
+      const aRaw = localStorage.getItem('vocalyx_alerts_config');
+      if (aRaw && healthData && !healthData.telegram) {
+        const a = JSON.parse(aRaw);
+        if (a && (a.telegram?.bot_token || a.whatsapp?.to_phone || a.sms?.to_phone)) {
+          await api.updateAlertsConfig(a);
+          synced++;
+        }
+      }
+    } catch {}
+
+    if (synced > 0) {
+      toast.success('Restored saved browser tokens to the connected backend.');
+    }
+  },
+
+  async syncSavedTokensToBackend() {
+    if (!state.backendOk) {
+      toast.error('Connect to your backend URL first.');
+      return;
+    }
+    const btn = document.getElementById('btn-sync-browser-tokens');
+    if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+    let synced = 0;
+    try {
+      try {
+        const g = JSON.parse(localStorage.getItem('vocalyx_groq_config') || 'null');
+        if (g && g.api_key) {
+          await api.updateLlmConfig({ api_key: g.api_key, model: g.model || 'openai/gpt-oss-20b' });
+          synced++;
+        }
+      } catch {}
+      try {
+        const t = JSON.parse(localStorage.getItem('vocalyx_twilio_config') || 'null');
+        if (t && t.sid && t.token && t.phone) {
+          await api.updateTwilioConfig({
+            account_sid: t.sid,
+            auth_token: t.token,
+            phone_number: t.phone,
+            public_base_url: api.base,
+          });
+          synced++;
+        }
+      } catch {}
+      try {
+        const a = JSON.parse(localStorage.getItem('vocalyx_alerts_config') || 'null');
+        if (a && (a.telegram?.bot_token || a.whatsapp?.to_phone || a.sms?.to_phone)) {
+          await api.updateAlertsConfig(a);
+          synced++;
+        }
+      } catch {}
+
+      if (synced > 0) {
+        toast.success(`Synced ${synced} saved token group(s) to backend!`);
+        await Promise.all([
+          llmManager.loadConfig(),
+          twilioManager.loadConfig(),
+          alertsManager.loadConfig(),
+          checkBackendHealth(api.base),
+        ]);
+      } else {
+        toast.info('No saved browser tokens yet — enter Groq & Twilio below first.');
+      }
+    } catch (e) {
+      toast.error(`Token sync failed: ${e.message}`);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="upload-cloud"></i> Sync Saved Keys to Backend`;
+        lucide.createIcons({ nodes: [btn] });
+      }
+    }
+  },
+};
+
+/* ─── Groq AI (LLM) Settings Manager ────────────────────────────── */
+const llmManager = {
+  async loadConfig() {
+    try {
+      const savedLocal = localStorage.getItem('vocalyx_groq_config');
+      if (savedLocal) {
+        try {
+          const loc = JSON.parse(savedLocal);
+          const keyInp = document.getElementById('groq-api-key-input');
+          const modSel = document.getElementById('groq-model-select');
+          if (keyInp && !keyInp.value && loc.api_key) keyInp.value = loc.api_key;
+          if (modSel && loc.model) modSel.value = loc.model;
+        } catch {}
+      }
+      if (!state.backendOk) return;
+      const cfg = await api.getLlmConfig();
+      this.updateUI(cfg || {});
+    } catch (err) {
+      console.warn('[Groq] Config fetch:', err);
+    }
+  },
+
+  updateUI(cfg) {
+    const isConf = !!cfg.configured;
+    const dot = document.getElementById('groq-settings-dot');
+    const label = document.getElementById('groq-settings-label');
+    if (dot && label) {
+      dot.className = 'conn-dot ' + (isConf ? 'connected' : 'disconnected');
+      label.textContent = isConf ? `Connected (${cfg.model || 'Active'})` : 'Not Configured';
+    }
+    const keyInp = document.getElementById('groq-api-key-input');
+    if (keyInp && !keyInp.value && cfg.masked_api_key) {
+      keyInp.placeholder = cfg.masked_api_key;
+    }
+    const modSel = document.getElementById('groq-model-select');
+    if (modSel && cfg.model) modSel.value = cfg.model;
+  },
+
+  async saveConfig() {
+    const apiKey = document.getElementById('groq-api-key-input')?.value.trim();
+    const model = document.getElementById('groq-model-select')?.value || 'openai/gpt-oss-20b';
+    if (!apiKey || apiKey.includes('...')) {
+      toast.info('Please paste your full Groq API Key (starts with gsk_) and click Save.');
+      return;
+    }
+    try {
+      localStorage.setItem('vocalyx_groq_config', JSON.stringify({ api_key: apiKey, model }));
+    } catch {}
+
+    const btn = document.getElementById('btn-save-groq');
+    if (btn) { btn.disabled = true; btn.textContent = 'Verifying Groq…'; }
+    try {
+      const res = await api.updateLlmConfig({ api_key: apiKey, model });
+      if (res && res.verification && res.verification.ok) {
+        toast.success(`✓ Groq verified! Model: ${res.model}`);
+      } else if (res && res.verification && res.verification.error) {
+        toast.error(`Groq error: ${res.verification.error}`);
+      } else {
+        toast.success('Groq settings saved.');
+      }
+      await this.loadConfig();
+      await checkBackendHealth(api.base);
+    } catch (e) {
+      toast.error(`Save Groq failed: ${e.message}`);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="check-circle"></i> Save &amp; Verify Groq`;
+        lucide.createIcons({ nodes: [btn] });
+      }
+    }
   },
 };
 
@@ -2636,7 +2838,19 @@ const twilioManager = {
 const alertsManager = {
   config: null,
 
+  _saveLocal(section, obj) {
+    try {
+      const cur = JSON.parse(localStorage.getItem('vocalyx_alerts_config') || '{}');
+      cur[section] = obj;
+      localStorage.setItem('vocalyx_alerts_config', JSON.stringify(cur));
+    } catch {}
+  },
+
   async loadConfig() {
+    try {
+      const loc = JSON.parse(localStorage.getItem('vocalyx_alerts_config') || 'null');
+      if (loc) alertsManager.updateUI(loc);
+    } catch {}
     if (!state.backendOk) return;
     try {
       const cfg = await api.getAlertsConfig();
@@ -2739,9 +2953,9 @@ const alertsManager = {
     const btn = document.getElementById('btn-save-wa-alert');
     if (btn) btn.disabled = true;
     try {
-      await api.updateAlertsConfig({
-        whatsapp: { enabled, to_phone: toPhone, from_phone: fromPhone, content_sid: contentSid }
-      });
+      const waObj = { enabled, to_phone: toPhone, from_phone: fromPhone, content_sid: contentSid };
+      alertsManager._saveLocal('whatsapp', waObj);
+      await api.updateAlertsConfig({ whatsapp: waObj });
       toast.success('WhatsApp alert settings saved!');
       await alertsManager.loadConfig();
     } catch (e) {
@@ -2792,9 +3006,9 @@ const alertsManager = {
     const btn = document.getElementById('btn-save-sms-alert');
     if (btn) btn.disabled = true;
     try {
-      await api.updateAlertsConfig({
-        sms: { enabled, to_phone: toPhone }
-      });
+      const smsObj = { enabled, to_phone: toPhone };
+      alertsManager._saveLocal('sms', smsObj);
+      await api.updateAlertsConfig({ sms: smsObj });
       toast.success('SMS alert settings saved!');
       await alertsManager.loadConfig();
     } catch (e) {
@@ -2842,9 +3056,9 @@ const alertsManager = {
     const btn = document.getElementById('btn-save-tg-alert');
     if (btn) btn.disabled = true;
     try {
-      await api.updateAlertsConfig({
-        telegram: { enabled, bot_token: token, chat_id: chatId }
-      });
+      const tgObj = { enabled, bot_token: token, chat_id: chatId };
+      alertsManager._saveLocal('telegram', tgObj);
+      await api.updateAlertsConfig({ telegram: tgObj });
       toast.success('Telegram alert settings saved!');
       await alertsManager.loadConfig();
     } catch (e) {
@@ -3553,8 +3767,21 @@ function bindEvents() {
     }
   });
 
-  // ── Settings ──
+  // ── Settings & Groq AI ──
   document.getElementById('btn-connect-backend')?.addEventListener('click', () => settings.connectBackend());
+  document.getElementById('btn-sync-browser-tokens')?.addEventListener('click', () => settings.syncSavedTokensToBackend());
+  document.getElementById('btn-save-groq')?.addEventListener('click', () => llmManager.saveConfig());
+  document.getElementById('btn-toggle-groq-key')?.addEventListener('click', () => {
+    const inp = document.getElementById('groq-api-key-input');
+    if (!inp) return;
+    const isPass = inp.type === 'password';
+    inp.type = isPass ? 'text' : 'password';
+    const icon = document.querySelector('#btn-toggle-groq-key i');
+    if (icon) {
+      icon.setAttribute('data-lucide', isPass ? 'eye-off' : 'eye');
+      lucide.createIcons({ nodes: [document.getElementById('btn-toggle-groq-key')] });
+    }
+  });
   document.getElementById('backend-url-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') settings.connectBackend();
   });

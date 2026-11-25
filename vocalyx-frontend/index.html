@@ -1290,12 +1290,12 @@
             <div class="form-group">
               <label for="backend-url-input">Backend API URL</label>
               <div class="url-input-row">
-                <input type="url" id="backend-url-input" class="form-input" placeholder="https://ebedsouza-vocalyx.hf.space" />
+                <input type="url" id="backend-url-input" class="form-input" placeholder="https://xxxx.ngrok-free.dev" />
                 <button class="btn btn-lime" id="btn-connect-backend">
                   <i data-lucide="plug-zap"></i> Connect →
                 </button>
               </div>
-              <div class="field-hint">Defaults to your live Hugging Face Space (ZeroGPU backend)</div>
+              <div class="field-hint">Paste your Kaggle ngrok URL or local backend URL</div>
             </div>
 
             <div class="health-info" id="health-info" style="display:none">
@@ -1308,15 +1308,63 @@
             <div class="settings-instructions">
               <div class="inst-step">
                 <div class="inst-num">1</div>
-                <div>Backend runs on <strong>Hugging Face Spaces (ZeroGPU)</strong></div>
+                <div>All API keys (<strong>Groq, Twilio, Telegram, WhatsApp</strong>) are entered below and saved in your browser + server — no backend <code>.env</code> editing needed</div>
               </div>
               <div class="inst-step">
                 <div class="inst-num">2</div>
-                <div>Connected to: <code>https://ebedsouza-vocalyx.hf.space</code></div>
+                <div>Start Kaggle (only needs <code>NGROK_AUTH_TOKEN</code>), paste the printed ngrok URL above, and click <strong>Connect</strong></div>
               </div>
-              <div class="inst-step">
-                <div class="inst-num">3</div>
-                <div>Click <strong>Connect</strong> to test live status or update backend URL</div>
+              <div class="inst-step" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                  <div class="inst-num">3</div>
+                  <div>Switched to a new Kaggle URL? Push your saved browser tokens in 1 click:</div>
+                </div>
+                <button type="button" class="btn btn-dark btn-sm" id="btn-sync-browser-tokens">
+                  <i data-lucide="upload-cloud"></i> Sync Saved Keys to Backend
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Groq AI Settings (Frontend-Managed) -->
+          <div class="card settings-card">
+            <div class="settings-card-header">
+              <div class="settings-card-icon"><i data-lucide="sparkles"></i></div>
+              <div>
+                <h3>Groq AI (LLM) Configuration</h3>
+                <p>Set your Groq API key and model directly from the frontend</p>
+              </div>
+              <div class="connection-status-badge" id="groq-settings-badge">
+                <div class="conn-dot disconnected" id="groq-settings-dot"></div>
+                <span id="groq-settings-label">Not Configured</span>
+              </div>
+            </div>
+
+            <div class="twilio-config-form" style="display:flex;flex-direction:column;gap:14px;margin-top:16px;">
+              <div class="form-group">
+                <label for="groq-api-key-input">Groq API Key</label>
+                <div class="url-input-row">
+                  <input type="password" id="groq-api-key-input" class="form-input" placeholder="gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                  <button type="button" class="btn btn-dark" id="btn-toggle-groq-key" title="Show/Hide">
+                    <i data-lucide="eye"></i>
+                  </button>
+                </div>
+                <div class="field-hint">Get a free key at console.groq.com — saved in browser &amp; active backend</div>
+              </div>
+
+              <div class="form-group">
+                <label for="groq-model-select">Groq Model</label>
+                <select id="groq-model-select" class="form-select" style="width:100%;">
+                  <option value="openai/gpt-oss-20b" selected>openai/gpt-oss-20b (Default Fast)</option>
+                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+                  <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Ultra Fast)</option>
+                </select>
+              </div>
+
+              <div class="twilio-actions-row" style="display:flex;gap:10px;margin-top:4px;">
+                <button class="btn btn-lime btn-lg" id="btn-save-groq">
+                  <i data-lucide="check-circle"></i> Save &amp; Verify Groq
+                </button>
               </div>
             </div>
           </div>

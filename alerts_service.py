@@ -140,14 +140,26 @@ def update_config(data: Dict[str, Any]) -> Dict[str, Any]:
         if config:
             if "bot_token" in data["telegram"]:
                 config.TELEGRAM_BOT_TOKEN = data["telegram"]["bot_token"]
+                os.environ["TELEGRAM_BOT_TOKEN"] = data["telegram"]["bot_token"]
             if "chat_id" in data["telegram"]:
                 config.TELEGRAM_CHAT_ID = data["telegram"]["chat_id"]
+                os.environ["TELEGRAM_CHAT_ID"] = data["telegram"]["chat_id"]
 
     if "sms" in data and isinstance(data["sms"], dict):
         _alerts_config["sms"].update(data["sms"])
+        if config and "to_phone" in data["sms"]:
+            config.SMS_TO_PHONE = data["sms"]["to_phone"]
+            os.environ["SMS_TO_PHONE"] = data["sms"]["to_phone"]
 
     if "whatsapp" in data and isinstance(data["whatsapp"], dict):
         _alerts_config["whatsapp"].update(data["whatsapp"])
+        if config:
+            if "to_phone" in data["whatsapp"]:
+                config.WHATSAPP_TO_PHONE = data["whatsapp"]["to_phone"]
+                os.environ["WHATSAPP_TO_PHONE"] = data["whatsapp"]["to_phone"]
+            if "content_sid" in data["whatsapp"]:
+                config.WHATSAPP_CONTENT_SID = data["whatsapp"]["content_sid"]
+                os.environ["WHATSAPP_CONTENT_SID"] = data["whatsapp"]["content_sid"]
 
     _persist_config()
     return get_config()

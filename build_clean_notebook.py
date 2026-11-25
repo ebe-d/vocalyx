@@ -26,16 +26,10 @@ Run the entire **Vocalyx** AI Telephony & Voice Cloning Platform on a free, dedi
 ### ⚠️ One-Time Kaggle Setup Before Running:
 1. Right sidebar → **Accelerator:** **GPU T4 x2** (or **GPU P100**)
 2. Right sidebar → **Internet:** **On**
-3. Top bar → **Add-ons → Secrets** (add & toggle ON):
+3. Top bar → **Add-ons → Secrets** (only 1 required secret!):
+   - `NGROK_AUTH_TOKEN` *(required to expose the live HTTPS backend URL)*
    - `GITHUB_TOKEN` *(only needed if repo is Private; skip if Public)*
-   - `GROQ_API_KEY`
-   - `TWILIO_ACCOUNT_SID`
-   - `TWILIO_AUTH_TOKEN`
-   - `TWILIO_PHONE_NUMBER`
-   - `TELEGRAM_BOT_TOKEN`
-   - `TELEGRAM_CHAT_ID`
-   - `NGROK_AUTH_TOKEN`
-   - *(Optional)* `WHATSAPP_TO_PHONE`, `GITHUB_REPO`
+   - **All other API keys (`GROQ_API_KEY`, `TWILIO_*`, `TELEGRAM_*`, `WHATSAPP_*`) are entered directly in the Frontend Settings UI** — no `.env` or extra Kaggle Secrets required!
 """)
 })
 
@@ -279,7 +273,7 @@ cells.append({
 cells.append({
     "cell_type": "markdown",
     "metadata": {},
-    "source": to_lines("## Step 4: Load Credentials from Kaggle Secrets")
+    "source": to_lines("## Step 4: Load Ngrok Tunnel Token (All App API Keys Are Set in Frontend)")
 })
 
 # Cell 8: Step 4 Code
@@ -329,51 +323,30 @@ try:
 except Exception:
     _client = None
 
-# Bulk Option A: Single Kaggle Secret named VOCALYX_ENV containing full .env text or JSON
+# Optional bulk/legacy secrets loader (never required for Groq/Twilio/Telegram/WhatsApp)
 if _client is not None:
-    try:
-        _bundle = _client.get_secret("VOCALYX_ENV")
-        if _bundle:
-            n = _apply_env_text(_bundle)
-            print(f"📦 Loaded {n} keys from single Kaggle Secret 'VOCALYX_ENV'!")
-    except Exception:
-        pass
-
-# Bulk Option B: Private Kaggle Dataset containing .env / env.txt / vocalyx.env
-for _env_cand in glob.glob("/kaggle/input/**/.env", recursive=True) + glob.glob("/kaggle/input/**/env.txt", recursive=True) + glob.glob("/kaggle/input/**/vocalyx.env", recursive=True):
-    try:
-        with open(_env_cand, "r", encoding="utf-8") as _ef:
-            n = _apply_env_text(_ef.read())
-        print(f"📂 Loaded {n} keys from private dataset file: {_env_cand}")
-    except Exception:
-        pass
-
-# Fallback Option C: Individual Kaggle Secrets
-secret_keys = [
-    "GROQ_API_KEY",
-    "TWILIO_ACCOUNT_SID",
-    "TWILIO_AUTH_TOKEN",
-    "TWILIO_PHONE_NUMBER",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_CHAT_ID",
-    "NGROK_AUTH_TOKEN",
-    "WHATSAPP_TO_PHONE",
-    "WHATSAPP_CONTENT_SID",
-    "SMS_TO_PHONE",
-]
-
-for key in secret_keys:
-    val = os.environ.get(key, "").strip()
-    if not val and _client is not None:
+    for _secret_name in ("NGROK_AUTH_TOKEN", "GITHUB_TOKEN", "VOCALYX_ENV"):
         try:
-            val = (_client.get_secret(key) or "").strip()
-            if val:
-                os.environ[key] = val
+            _val = (_client.get_secret(_secret_name) or "").strip()
+            if _val:
+                if _secret_name == "VOCALYX_ENV":
+                    _apply_env_text(_val)
+                elif not os.environ.get(_secret_name):
+                    os.environ[_secret_name] = _val
         except Exception:
             pass
-    status = "✅ loaded" if os.environ.get(key) else "⚠️ not set"
-    print(f"  {key}: {status}")
 
+# Optional private dataset .env if attached
+for _env_cand in glob.glob("/kaggle/input/**/.env", recursive=True):
+    try:
+        with open(_env_cand, "r", encoding="utf-8") as _ef:
+            _apply_env_text(_ef.read())
+    except Exception:
+        pass
+
+ngrok_ok = bool(os.environ.get("NGROK_AUTH_TOKEN", "").strip())
+print(f"  NGROK_AUTH_TOKEN: {'✅ loaded' if ngrok_ok else '❌ NOT SET (add NGROK_AUTH_TOKEN in Add-ons -> Secrets)'}")
+print("ℹ️  Frontend Token Mode active: Groq, Twilio, Telegram, WhatsApp & SMS keys are set directly in the web Settings UI.")
 print("✅ Step 4 complete!")
 """)
 })
@@ -487,7 +460,7 @@ print("🚀 VOCALYX MULTI-TURN AI TELEPHONY IS LIVE!")
 print(f"🌐 PUBLIC BASE URL: {public_url}")
 print(f"📞 TWILIO WEBHOOK URL: {public_url}/api/twilio/voice")
 print("=" * 65)
-print("👉 Paste the PUBLIC BASE URL into your Netlify App Settings as 'Public Server URL'.")
+print("👉 Paste the PUBLIC BASE URL into your Frontend Settings as 'Backend API URL' — then enter Groq, Twilio & Alerts keys right in the UI!")
 
 # 3. Launch FastAPI server
 for k in ["PYTHONHASHSEED", "PYTHONDEVMODE"]:

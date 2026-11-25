@@ -1437,6 +1437,31 @@ def update_twilio_config(req: TwilioConfigUpdate, request: Request):
     }
 
 
+class LLMConfigUpdate(BaseModel):
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+
+
+@app.get("/api/llm/config")
+def get_llm_config():
+    from backend import llm_engine
+    return llm_engine.get_config()
+
+
+@app.post("/api/llm/config")
+def update_llm_config(req: LLMConfigUpdate):
+    from backend import llm_engine
+    cfg = llm_engine.update_config(api_key=req.api_key, model=req.model)
+    test_res = llm_engine.verify_credentials()
+    return {"success": True, **cfg, "verification": test_res}
+
+
+@app.post("/api/llm/test")
+def test_llm_connection():
+    from backend import llm_engine
+    return llm_engine.verify_credentials()
+
+
 @app.post("/api/twilio/test")
 def test_twilio():
     from backend import twilio_service
@@ -2189,8 +2214,9 @@ async def twilio_status_webhook(request: Request, db: Session = Depends(get_db))
 def health(db: Session = Depends(get_db)):
     voice_info = get_voice_status()
     import torch
-    from backend.config import GROQ_MODEL, GROQ_API_KEY, TELEGRAM_BOT_TOKEN
-    from backend import twilio_service
+    from backend import twilio_service, llm_engine, alerts_service
+    llm_cfg = llm_engine.get_config()
+    alerts_cfg = alerts_service.get_config()
     doc_count = 0
     try:
         doc_count = db.query(models.Document).count()
@@ -2200,11 +2226,11 @@ def health(db: Session = Depends(get_db)):
     return {
         "status": "ok",
         "version": "1.0.0",
-        "model": GROQ_MODEL,
-        "tts": "ChatterboxTurboTTS (cuda)" if torch.cuda.is_available() else "ChatterboxTTS (cpu)",
+        "model": llm_cfg.get("model", "openai/gpt-oss-20b"),
+        "tts": "F5-TTS / LuxTTS (cuda)" if torch.cuda.is_available() else "F5-TTS / Edge-TTS (cpu)",
         "rag_docs": doc_count,
-        "telegram": bool(TELEGRAM_BOT_TOKEN),
-        "groq_configured": bool(GROQ_API_KEY),
+        "telegram": bool(alerts_cfg.get("telegram", {}).get("ready")),
+        "groq_configured": bool(llm_cfg.get("configured")),
         "twilio_configured": twilio_service.is_configured(),
         "voice_clone": voice_info,
         "has_voice_clone": voice_info["has_voice_clone"],

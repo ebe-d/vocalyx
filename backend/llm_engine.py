@@ -8,19 +8,124 @@ from typing import Optional
 
 from groq import Groq
 
-from backend.config import GROQ_API_KEY, GROQ_MODEL
+from backend import config
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+LLM_SETTINGS_FILE = os.path.join(_BASE_DIR, "llm_settings.json")
 
 _client = None
+_client_key = None
+
+
+def _load_persisted_config():
+    """Load Groq API key and model saved from the UI if present on disk."""
+    for cand in (LLM_SETTINGS_FILE, "llm_settings.json", os.path.join("backend", "llm_settings.json")):
+        if os.path.exists(cand):
+            try:
+                with open(cand, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    if data.get("api_key"):
+                        config.GROQ_API_KEY = str(data["api_key"]).strip()
+                        os.environ["GROQ_API_KEY"] = config.GROQ_API_KEY
+                    if data.get("model"):
+                        config.GROQ_MODEL = str(data["model"]).strip()
+                        os.environ["GROQ_MODEL"] = config.GROQ_MODEL
+                    print(f"[LLM Config] Restored Groq settings from {cand}")
+                    return
+            except Exception as exc:
+                print(f"[LLM Config Load Note]: {exc}")
+
+
+def _persist_config():
+    """Save Groq settings to disk so frontend updates survive backend restarts."""
+    data = {
+        "api_key": get_active_api_key(),
+        "model": get_active_model(),
+    }
+    for dest in (LLM_SETTINGS_FILE, "llm_settings.json"):
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+            with open(dest, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as exc:
+            print(f"[LLM Config Save Note]: {exc}")
+
+
+def get_active_api_key() -> str:
+    return (getattr(config, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")).strip()
+
+
+def get_active_model() -> str:
+    return (getattr(config, "GROQ_MODEL", "") or os.getenv("GROQ_MODEL", "") or "openai/gpt-oss-20b").strip()
+
+
+def get_config() -> dict:
+    key = get_active_api_key()
+    masked = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else ("***" if key else "")
+    return {
+        "configured": bool(key),
+        "masked_api_key": masked,
+        "model": get_active_model(),
+    }
+
+
+def update_config(api_key: Optional[str] = None, model: Optional[str] = None) -> dict:
+    global _client, _client_key
+    if api_key is not None and api_key.strip() and "..." not in api_key:
+        clean_key = api_key.strip()
+        config.GROQ_API_KEY = clean_key
+        os.environ["GROQ_API_KEY"] = clean_key
+        _client = None
+        _client_key = None
+    if model is not None and model.strip():
+        clean_model = model.strip()
+        config.GROQ_MODEL = clean_model
+        os.environ["GROQ_MODEL"] = clean_model
+    _persist_config()
+    return get_config()
+
+
+def verify_credentials() -> dict:
+    key = get_active_api_key()
+    if not key:
+        return {
+            "ok": False,
+            "configured": False,
+            "model": get_active_model(),
+            "error": "Groq API Key is not configured. Enter it in Settings on the frontend.",
+        }
+    try:
+        client = _get_client()
+        models_page = client.models.list()
+        count = len(getattr(models_page, "data", []) or [])
+        return {
+            "ok": True,
+            "configured": True,
+            "model": get_active_model(),
+            "available_models": count,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "configured": True,
+            "model": get_active_model(),
+            "error": str(exc),
+        }
+
+
+_load_persisted_config()
 
 
 def _get_client() -> Groq:
-    """Lazily initialize Groq client using active config or environment key."""
-    global _client
-    api_key = os.getenv("GROQ_API_KEY") or GROQ_API_KEY
+    """Lazily initialize Groq client using active UI-saved or environment key."""
+    global _client, _client_key
+    api_key = get_active_api_key()
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY is not configured. Set it in .env or Kaggle Secrets.")
-    if _client is None:
+        raise RuntimeError("GROQ_API_KEY is not configured. Enter your Groq API Key in Settings on the frontend.")
+    if _client is None or _client_key != api_key:
         _client = Groq(api_key=api_key)
+        _client_key = api_key
     return _client
 
 # ---------------------------------------------------------------------------
@@ -162,7 +267,7 @@ def get_chat_response(
         messages.append({"role": "user", "content": user_message})
 
     completion = _get_client().chat.completions.create(
-        model=GROQ_MODEL,
+        model=get_active_model(),
         messages=messages,
     )
     return completion.choices[0].message.content.strip()
@@ -187,7 +292,7 @@ def generate_context_greeting(
     )
     try:
         completion = _get_client().chat.completions.create(
-            model=GROQ_MODEL,
+            model=get_active_model(),
             messages=[{"role": "system", "content": prompt}],
             timeout=5.0,
         )
@@ -248,7 +353,7 @@ Transcript:
 
     import re
 
-    models_to_try = [GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    models_to_try = [get_active_model(), "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
     # De-duplicate while preserving order
     seen = set()
     candidate_models = [m for m in models_to_try if m and not (m in seen or seen.add(m))]

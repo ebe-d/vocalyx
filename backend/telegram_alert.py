@@ -12,7 +12,8 @@ except ImportError:
     except ImportError:
         alerts_service = None
 
-from backend.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+import os
+from backend import config
 
 
 def send_alert(
@@ -40,7 +41,9 @@ def send_alert(
         )
 
     # Standalone Telegram fallback
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    bot_token = (getattr(config, "TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
+    chat_id = (getattr(config, "TELEGRAM_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")).strip()
+    if not bot_token or not chat_id:
         return False
 
     message = (
@@ -54,9 +57,9 @@ def send_alert(
     if reasoning:
         message += f"\n💡 *Reasoning:* {reasoning}"
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": chat_id,
         "text": message,
         "parse_mode": "Markdown",
     }
