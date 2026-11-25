@@ -310,48 +310,29 @@ def _ensure_whatsapp_template(client, clean_from: str = "") -> Tuple[Optional[st
 
 
 def _diagnose_whatsapp_sandbox_window(client, clean_from: str, clean_to: str) -> str:
-    """Check Twilio account message history to pinpoint Sandbox/sender/account mismatch issues."""
+    """Check Twilio account message history to pinpoint Sandbox/Tryout/template issues."""
     sid = getattr(client, "account_sid", "") or ""
     masked_sid = f"{sid[:6]}...{sid[-4:]}" if len(sid) > 10 else (sid or "unknown")
-    sandbox_from = "whatsapp:+14155238886"
-
-    if clean_from != sandbox_from:
-        sandbox_hint = ""
-        try:
-            sb_raw = client.messages.list(from_=clean_to, to=sandbox_from, limit=5)
-            sb_wa = [m for m in sb_raw if str(getattr(m, "to", "")).lower() == sandbox_from]
-            if sb_wa:
-                sb_dt = getattr(sb_wa[0], "date_sent", None) or getattr(sb_wa[0], "date_created", None)
-                sandbox_hint = f" (Account {masked_sid} DOES have an inbound WhatsApp message to {sandbox_from} at {sb_dt}.)"
-            else:
-                sandbox_hint = f" (Account {masked_sid} currently has 0 inbound WhatsApp messages to {sandbox_from}; send your 'join <code>' + 'hi' to {sandbox_from}.)"
-        except Exception:
-            pass
-        return (
-            f"Sender mismatch: 'Twilio WhatsApp Sender' is set to {clean_from} instead of Twilio Sandbox {sandbox_from}. "
-            f"Regular Twilio Voice/SMS numbers cannot send WhatsApp without Meta Business registration — "
-            f"change 'Twilio WhatsApp Sender' in Message Alerts back to {sandbox_from}.{sandbox_hint}"
-        )
-
     try:
         raw_in = client.messages.list(from_=clean_to, to=clean_from, limit=5)
         inbound = [m for m in raw_in if str(getattr(m, "to", "")).lower().startswith("whatsapp:")]
         if not inbound:
             return (
                 f"Twilio account {masked_sid} has 0 inbound WhatsApp messages from {clean_to} to {clean_from}. "
-                f"Either your Sandbox session expired (re-send your 'join <2-word-code>' to {clean_from} and wait for 'You are all set!'), "
-                f"or your active Twilio Account SID ({masked_sid}) is a different Console project than the Sandbox you joined."
+                f"Send your join code (e.g. 'join twilio-trial') + 'hi' to {clean_from}, "
+                f"or copy the ContentSid (HX...) from Console -> Try out WhatsApp -> 'Send a message'."
             )
         last_dt = getattr(inbound[0], "date_sent", None) or getattr(inbound[0], "date_created", None)
         return (
-            f"Last inbound WhatsApp message to account {masked_sid} ({clean_from}) was at {last_dt}. "
-            f"If free-form still fails, paste your Sandbox Content Template SID (HX...) from "
-            f"Twilio Console -> Messaging -> Try it out -> Send a WhatsApp message into Alerts."
+            f"Twilio received your WhatsApp message at {last_dt} ({masked_sid} / {clean_from}), "
+            f"yet Twilio Trial still requires an approved ContentSid (HX...) for API alerts. "
+            f"In your Twilio 'Try out WhatsApp' window, click the 'Send a message' tab (left of 'Receive a message'), "
+            f"copy the ContentSid (HX...) from the API code panel there, and paste it into 'Content Template SID' in Message Alerts."
         )
     except Exception:
         return (
-            f"Verify in Twilio Console ({masked_sid}) -> Messaging -> Try it out -> Send a WhatsApp message that {clean_to} joined {clean_from}, "
-            f"or paste the Sandbox Content Template SID (HX...) into Alerts."
+            f"In Twilio Console ({masked_sid}) -> Try out WhatsApp -> click the 'Send a message' tab, "
+            f"copy the ContentSid (HX...) shown in the API snippet, and paste it into 'Content Template SID' in Alerts."
         )
 
 
@@ -432,17 +413,26 @@ def send_whatsapp(
                 }
                 vars_payload.setdefault("1", compact_text)
                 vars_payload.setdefault("2", "Vocalyx Call Alert")
-                try:
-                    message = client.messages.create(
-                        from_=clean_from,
-                        to=clean_to,
-                        content_sid=resolved_content_sid,
-                        content_variables=json.dumps(vars_payload),
-                    )
-                    return True, f"WhatsApp alert sent via template {resolved_content_sid} (SID: {message.sid})"
-                except Exception as tpl_exc:
-                    diag = _diagnose_whatsapp_sandbox_window(client, clean_from, clean_to)
-                    return False, f"Template {resolved_content_sid} send failed ({tpl_exc}). {diag}"
+                attempts = [vars_payload, {"1": compact_text[:240] or "Vocalyx Call Alert"}, None]
+                last_tpl_exc = None
+                for cv in attempts:
+                    try:
+                        kwargs = {
+                            "from_": clean_from,
+                            "to": clean_to,
+                            "content_sid": resolved_content_sid,
+                        }
+                        if cv is not None:
+                            kwargs["content_variables"] = json.dumps(cv)
+                        message = client.messages.create(**kwargs)
+                        return True, f"WhatsApp alert sent via template {resolved_content_sid} (SID: {message.sid})"
+                    except Exception as tpl_exc:
+                        last_tpl_exc = tpl_exc
+                        msg_l = str(tpl_exc).lower()
+                        if not ("variable" in msg_l or "21656" in msg_l):
+                            break
+                diag = _diagnose_whatsapp_sandbox_window(client, clean_from, clean_to)
+                return False, f"Template {resolved_content_sid} send failed ({last_tpl_exc}). {diag}"
 
             diag = _diagnose_whatsapp_sandbox_window(client, clean_from, clean_to)
             return (
