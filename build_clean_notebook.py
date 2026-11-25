@@ -124,7 +124,21 @@ def _get_secret(name, default=""):
         return val
     try:
         from kaggle_secrets import UserSecretsClient
-        val = (UserSecretsClient().get_secret(name) or "").strip()
+        _cl = UserSecretsClient()
+        try:
+            _b = _cl.get_secret("VOCALYX_ENV")
+            if _b:
+                for raw_line in _b.splitlines():
+                    ln = raw_line.strip()
+                    if ln and not ln.startswith("#") and "=" in ln:
+                        k, v = ln.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and v and not os.environ.get(k):
+                            os.environ[k] = v
+        except Exception:
+            pass
+        val = os.environ.get(name, "").strip() or (_cl.get_secret(name) or "").strip()
         if val:
             os.environ[name] = val
             return val
@@ -274,14 +288,67 @@ cells.append({
     "execution_count": None,
     "metadata": {},
     "outputs": [],
-    "source": to_lines("""import os
+    "source": to_lines("""import os, glob, json
 
 # Engine defaults
 os.environ.setdefault("TWILIO_VOICE_ENGINE", "f5tts")
 os.environ.setdefault("TTS_ENGINE", "f5tts")
 os.environ.setdefault("WHATSAPP_FROM_PHONE", "whatsapp:+14155238886")
 
-# Load secrets securely from Kaggle Add-ons -> Secrets
+def _apply_env_text(raw_text):
+    if not raw_text:
+        return 0
+    count = 0
+    s = raw_text.strip()
+    if s.startswith("{") and s.endswith("}"):
+        try:
+            data = json.loads(s)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if k and v is not None and not os.environ.get(str(k).strip()):
+                        os.environ[str(k).strip()] = str(v).strip()
+                        count += 1
+                return count
+        except Exception:
+            pass
+    for raw_line in s.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k and v and not os.environ.get(k):
+            os.environ[k] = v
+            count += 1
+    return count
+
+try:
+    from kaggle_secrets import UserSecretsClient
+    _client = UserSecretsClient()
+except Exception:
+    _client = None
+
+# Bulk Option A: Single Kaggle Secret named VOCALYX_ENV containing full .env text or JSON
+if _client is not None:
+    try:
+        _bundle = _client.get_secret("VOCALYX_ENV")
+        if _bundle:
+            n = _apply_env_text(_bundle)
+            print(f"📦 Loaded {n} keys from single Kaggle Secret 'VOCALYX_ENV'!")
+    except Exception:
+        pass
+
+# Bulk Option B: Private Kaggle Dataset containing .env / env.txt / vocalyx.env
+for _env_cand in glob.glob("/kaggle/input/**/.env", recursive=True) + glob.glob("/kaggle/input/**/env.txt", recursive=True) + glob.glob("/kaggle/input/**/vocalyx.env", recursive=True):
+    try:
+        with open(_env_cand, "r", encoding="utf-8") as _ef:
+            n = _apply_env_text(_ef.read())
+        print(f"📂 Loaded {n} keys from private dataset file: {_env_cand}")
+    except Exception:
+        pass
+
+# Fallback Option C: Individual Kaggle Secrets
 secret_keys = [
     "GROQ_API_KEY",
     "TWILIO_ACCOUNT_SID",
@@ -291,14 +358,9 @@ secret_keys = [
     "TELEGRAM_CHAT_ID",
     "NGROK_AUTH_TOKEN",
     "WHATSAPP_TO_PHONE",
+    "WHATSAPP_CONTENT_SID",
     "SMS_TO_PHONE",
 ]
-
-try:
-    from kaggle_secrets import UserSecretsClient
-    _client = UserSecretsClient()
-except Exception:
-    _client = None
 
 for key in secret_keys:
     val = os.environ.get(key, "").strip()
@@ -494,7 +556,21 @@ def _get_secret(name, default=""):
         return val
     try:
         from kaggle_secrets import UserSecretsClient
-        val = (UserSecretsClient().get_secret(name) or "").strip()
+        _cl = UserSecretsClient()
+        try:
+            _b = _cl.get_secret("VOCALYX_ENV")
+            if _b:
+                for raw_line in _b.splitlines():
+                    ln = raw_line.strip()
+                    if ln and not ln.startswith("#") and "=" in ln:
+                        k, v = ln.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and v and not os.environ.get(k):
+                            os.environ[k] = v
+        except Exception:
+            pass
+        val = os.environ.get(name, "").strip() or (_cl.get_secret(name) or "").strip()
         if val:
             os.environ[name] = val
             return val
