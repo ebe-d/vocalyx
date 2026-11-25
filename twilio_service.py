@@ -212,7 +212,7 @@ def build_greeting_text(
             return f"Hello {cname}! Thank you for calling Vocalyx, this is {persona}. How can I help you today?"
         return f"Hello, thank you for calling Vocalyx! My name is {persona}. How may I assist you today?"
     if m == "marketing":
-        return f"Hi {cname}! This is {persona} calling from Vocalyx with an exciting update for you! Do you have a quick minute?"
+        return f"Hi {cname}! This is {persona} calling from Vocalyx with a quick update for you. Do you have a minute?"
     return f"Hello {cname}! This is {persona} calling from Vocalyx. How are you doing today?"
 
 

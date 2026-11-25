@@ -435,6 +435,7 @@ def send_whatsapp(
                 last_tpl_exc = None
                 for cv in attempts:
                     try:
+                        import time as _time
                         message = client.messages.create(
                             from_=clean_from,
                             to=clean_to,
@@ -442,12 +443,21 @@ def send_whatsapp(
                             content_variables=json.dumps(cv),
                         )
                         rendered_body = (getattr(message, "body", None) or "").strip()
+                        # Twilio resolves ContentSid bodies asynchronously right after creation;
+                        # poll briefly so we read the actual expanded text Twilio delivered.
                         if not rendered_body and getattr(message, "sid", None):
-                            try:
-                                fetched = client.messages(message.sid).fetch()
-                                rendered_body = (getattr(fetched, "body", None) or "").strip()
-                            except Exception:
-                                pass
+                            for _ in range(3):
+                                _time.sleep(0.6)
+                                try:
+                                    fetched = client.messages(message.sid).fetch()
+                                    rendered_body = (getattr(fetched, "body", None) or "").strip()
+                                    if rendered_body:
+                                        break
+                                except Exception:
+                                    break
+
+                        if rendered_body:
+                            print(f"[Alerts WhatsApp Rendered Body] SID={getattr(message, 'sid', '')}: {rendered_body!r}")
 
                         # Verify Twilio actually injected our call summary rather than sending a static canned Trial message
                         markers = []
@@ -456,16 +466,25 @@ def send_whatsapp(
                                 for tok in re.findall(r"[A-Za-z0-9]{4,}", str(m_cand)):
                                     if tok.lower() not in ("caller", "vocalyx", "unknown", "phone", "contact", "alert", "score"):
                                         markers.append(tok)
-                        if rendered_body and markers and not any(tok.lower() in rendered_body.lower() for tok in markers):
+                        is_static_boilerplate = False
+                        if rendered_body:
+                            if markers and not any(tok.lower() in rendered_body.lower() for tok in markers):
+                                is_static_boilerplate = True
+                            elif any(
+                                phrase in rendered_body.lower()
+                                for phrase in ("welcome to twilio", "verification code", "your code is", "thanks for joining")
+                            ) and (not v_body_short or v_body_short[:15].lower() not in rendered_body.lower()):
+                                is_static_boilerplate = True
+                        if is_static_boilerplate:
                             print(
                                 f"[Alerts WhatsApp WARNING] Template {resolved_content_sid} delivered static canned text "
                                 f"without call summary: {rendered_body!r}"
                             )
                             return (
                                 False,
-                                f"Twilio delivered a static canned message ('{rendered_body[:90]}') instead of your call summary "
-                                f"because Content Template {resolved_content_sid} has no custom summary placeholders and Trial accounts block free-form/Content API. "
-                                f"Use a Content Template with {{{{1}}}} variable (paid Twilio auto-creates 'Vocalyx Alert: {{{{1}}}}'), or use SMS/Telegram for full summaries.",
+                                f"Twilio delivered its fixed Trial template ('{rendered_body[:100]}') instead of your call summary. "
+                                f"On Twilio Trial ('Try out WhatsApp'), Twilio blocks free-form messages (ContentSid Required) and Content API (error 20003). "
+                                f"Telegram & SMS send full dynamic call summaries cleanly on Trial; full WhatsApp summaries require upgrading Twilio.",
                             )
 
                         preview = f": {rendered_body[:160]}" if rendered_body else ""
