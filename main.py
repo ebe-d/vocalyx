@@ -1639,7 +1639,7 @@ def get_active_twilio_call(call_sid: Optional[str] = None, db: Session = Depends
         except Exception as poll_err:
             pass
 
-    return call_data
+    return {k: v for k, v in call_data.items() if k != "pending_futures"}
 
 
 @app.api_route("/api/twilio/voice", methods=["GET", "POST"])
@@ -1925,21 +1925,32 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
                 return out
 
             synth_future = loop.run_in_executor(None, _run_tts)
-            call_state.setdefault("pending_futures", {})[turn_id] = synth_future
-            wait_budget = max(1.5, 7.0 - (time.monotonic() - t_req_start))
+            twilio_service.pending_synth_futures[synth_key] = synth_future
+            remaining = 3.8 - (time.monotonic() - t_req_start)
+            if remaining <= 0.4:
+                from twilio.twiml.voice_response import VoiceResponse
+                public_url = twilio_service.resolve_base_url(base_url)
+                cont_url = f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop=1"
+                vr = VoiceResponse()
+                vr.pause(length=3)
+                vr.redirect(cont_url, method="POST")
+                print(f"[Twilio Webhook] Fast handoff to /api/twilio/continue after {time.monotonic() - t_req_start:.2f}s (turn={turn_id})")
+                return Response(content=str(vr), media_type="application/xml")
             try:
-                wav_path = await asyncio.wait_for(asyncio.shield(synth_future), timeout=wait_budget)
+                wav_path = await asyncio.wait_for(asyncio.shield(synth_future), timeout=remaining)
                 twilio_service.pregenerated_audio.pop(synth_key, None)
+                twilio_service.pending_synth_futures.pop(synth_key, None)
             except asyncio.TimeoutError:
                 from twilio.twiml.voice_response import VoiceResponse
                 public_url = twilio_service.resolve_base_url(base_url)
                 cont_url = f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop=1"
                 vr = VoiceResponse()
-                vr.pause(length=2)
+                vr.pause(length=3)
                 vr.redirect(cont_url, method="POST")
                 print(f"[Twilio Webhook] Fast handoff to /api/twilio/continue after {time.monotonic() - t_req_start:.2f}s (turn={turn_id})")
                 return Response(content=str(vr), media_type="application/xml")
             except Exception as synth_err:
+                twilio_service.pending_synth_futures.pop(synth_key, None)
                 print(f"[Twilio Webhook] Synthesis note ({call_engine}): {synth_err}")
                 wav_path = None
 
@@ -1983,27 +1994,32 @@ async def twilio_continue_webhook(request: Request):
 
     call_state = twilio_service.active_calls.get(call_sid, {})
     synth_key = f"{call_sid}:{turn_id}" if turn_id else call_sid
-    pending_future = call_state.get("pending_futures", {}).get(turn_id) if turn_id else None
+    pending_future = twilio_service.pending_synth_futures.get(synth_key) if turn_id else None
 
-    # Wait up to 6.5s per hop so each Twilio HTTP request always returns well under Twilio's 15s limit
+    # Wait up to 3.8s per hop so every Twilio HTTP request returns well within Twilio/ngrok webhook limits
     wav_path = None
-    for _ in range(32):
+    for _ in range(19):
         wav_path = twilio_service.pregenerated_audio.pop(synth_key, None)
         if not wav_path and not turn_id:
             wav_path = twilio_service.pregenerated_audio.pop(call_sid, None)
         if wav_path and os.path.exists(wav_path):
+            twilio_service.pending_synth_futures.pop(synth_key, None)
             break
         wav_path = None
         if pending_future is not None and pending_future.done():
+            twilio_service.pending_synth_futures.pop(synth_key, None)
             break
         await asyncio.sleep(0.2)
 
-    if (not wav_path or not os.path.exists(wav_path)) and hop < 2 and pending_future is not None and not pending_future.done():
+    if (not wav_path or not os.path.exists(wav_path)) and hop < 3 and pending_future is not None and not pending_future.done():
         public_url = twilio_service.resolve_base_url(base_url)
         vr = VoiceResponse()
-        vr.pause(length=1)
+        vr.pause(length=2)
         vr.redirect(f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop={hop + 1}", method="POST")
         return Response(content=str(vr), media_type="application/xml")
+
+    if turn_id:
+        twilio_service.pending_synth_futures.pop(synth_key, None)
 
     transcript = call_state.get("transcript", [])
     last_reply = "I am listening, please go ahead."

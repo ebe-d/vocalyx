@@ -20,8 +20,11 @@ from backend import config
 active_calls: Dict[str, Dict[str, Any]] = {}
 
 # Pre-generated audio files for zero-latency greeting playback
-# Keys: call_sid, contact_id, to_number -> wav_path
+# Keys: call_sid, contact_id, to_number, or call_sid:turn_id -> wav_path
 pregenerated_audio: Dict[str, str] = {}
+
+# Background synthesis futures keyed by synth_key (kept outside active_calls so active_calls stays JSON-serializable)
+pending_synth_futures: Dict[str, Any] = {}
 
 TWILIO_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "twilio_settings.json")
 

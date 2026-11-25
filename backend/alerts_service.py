@@ -240,16 +240,21 @@ def send_sms(text: str, to_phone: Optional[str] = None) -> Tuple[bool, str]:
         return False, f"Twilio SMS error: {exc}"
 
 
-def _ensure_whatsapp_template(client, clean_text_len: int = 900) -> Tuple[Optional[str], Optional[str]]:
+# Twilio's built-in global WhatsApp Sandbox template ("Your appointment is coming up on {{1}} at {{2}}")
+_TWILIO_SANDBOX_FALLBACK_SID = "HXb5b62575e6e4ff6129ad7c8efe1f983e"
+
+
+def _ensure_whatsapp_template(client, clean_from: str = "") -> Tuple[Optional[str], Optional[str]]:
     """
-    Find or auto-create a reusable Vocalyx Content Template (HX...) on the user's Twilio account
-    so Twilio WhatsApp alerts work even when Sandbox/Business requires ContentSid.
-    Returns (content_sid, status_note).
+    Find or auto-create a reusable Vocalyx Content Template (HX...) on paid Twilio accounts.
+    On Trial accounts (error 20003) or WhatsApp Sandbox (+14155238886), falls back to
+    Twilio's built-in pre-approved Sandbox template HX SID.
     """
     existing_sid = (_alerts_config.get("whatsapp", {}).get("content_sid") or "").strip()
     if existing_sid:
         return existing_sid, None
 
+    is_trial = False
     try:
         contents = client.content.v1.contents.list(limit=25)
         for rec in contents:
@@ -260,18 +265,32 @@ def _ensure_whatsapp_template(client, clean_text_len: int = 900) -> Tuple[Option
                 _persist_config()
                 return rec.sid, None
     except Exception as list_err:
-        print(f"[Alerts WhatsApp Content List Note]: {list_err}")
+        err_s = str(list_err)
+        print(f"[Alerts WhatsApp Content List Note]: {err_s}")
+        if "20003" in err_s or "trial account" in err_s.lower():
+            is_trial = True
+
+    if is_trial:
+        if "14155238886" in (clean_from or ""):
+            return _TWILIO_SANDBOX_FALLBACK_SID, None
+        return None, "Twilio Trial accounts do not support Content API template creation (error 20003)."
 
     try:
-        template = client.content.v1.contents.create(
-            friendly_name="vocalyx_call_alert",
-            language="en",
-            types={
-                "twilio/text": {
-                    "body": "Vocalyx Alert: {{1}}",
-                }
-            },
-        )
+        from twilio.rest.content.v1.content import ContentList
+        req_cls = getattr(ContentList, "ContentCreateRequest", None)
+        if req_cls is not None:
+            payload = req_cls(
+                friendly_name="vocalyx_call_alert",
+                language="en",
+                types={"twilio/text": {"body": "Vocalyx Alert: {{1}}"}},
+            )
+            template = client.content.v1.contents.create(content_create_request=payload)
+        else:
+            template = client.content.v1.contents.create(
+                friendly_name="vocalyx_call_alert",
+                language="en",
+                types={"twilio/text": {"body": "Vocalyx Alert: {{1}}"}},
+            )
         sid = template.sid
         try:
             client.content.v1.contents(sid).approval_requests.create(
@@ -285,6 +304,9 @@ def _ensure_whatsapp_template(client, clean_text_len: int = 900) -> Tuple[Option
         print(f"[Alerts WhatsApp] Auto-created Twilio Content Template SID: {sid}")
         return sid, None
     except Exception as create_err:
+        if "14155238886" in (clean_from or ""):
+            print(f"[Alerts WhatsApp] Falling back to Twilio Sandbox template ({create_err})")
+            return _TWILIO_SANDBOX_FALLBACK_SID, None
         return None, str(create_err)
 
 
@@ -354,13 +376,22 @@ def send_whatsapp(
 
             auto_err = None
             if not resolved_content_sid:
-                resolved_content_sid, auto_err = _ensure_whatsapp_template(client)
+                resolved_content_sid, auto_err = _ensure_whatsapp_template(client, clean_from=clean_from)
 
             if resolved_content_sid:
-                compact_text = " | ".join(line.strip() for line in text.replace("*", "").splitlines() if line.strip())[:950]
-                vars_payload = dict(template_vars or {})
-                vars_payload.setdefault("1", compact_text)
-                vars_payload.setdefault("2", "Vocalyx Call Alert")
+                compact_text = re.sub(r"\s+", " ", text.replace("*", "")).strip()[:800]
+                vars_payload = {
+                    str(k): re.sub(r"\s+", " ", str(v)).strip()[:240]
+                    for k, v in (template_vars or {}).items()
+                    if v is not None
+                }
+                if resolved_content_sid == _TWILIO_SANDBOX_FALLBACK_SID:
+                    # Global sandbox template: "Your appointment is coming up on {{1}} at {{2}}"
+                    vars_payload.setdefault("1", compact_text[:140] or "Vocalyx Call Alert")
+                    vars_payload.setdefault("2", "Ready for follow-up")
+                else:
+                    vars_payload.setdefault("1", compact_text)
+                    vars_payload.setdefault("2", "Vocalyx Call Alert")
                 try:
                     message = client.messages.create(
                         from_=clean_from,
@@ -372,9 +403,9 @@ def send_whatsapp(
                 except Exception as tpl_exc:
                     return (
                         False,
-                        f"Auto-template {resolved_content_sid} failed ({tpl_exc}). "
-                        f"Check Twilio Sandbox join status (send exact 2-word 'join ...' code from Twilio Console to {clean_from} so WhatsApp replies 'You are all set!') "
-                        f"or approve template {resolved_content_sid} in Twilio Content Template Builder.",
+                        f"Template {resolved_content_sid} send failed ({tpl_exc}). "
+                        f"If testing Twilio Sandbox, open Twilio Console -> Messaging -> Try it out -> Send a WhatsApp message, "
+                        f"send your 2-word 'join ...' code to {clean_from}, and verify {clean_to} is listed as a Sandbox Participant.",
                     )
 
             return (
