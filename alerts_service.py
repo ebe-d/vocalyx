@@ -240,21 +240,16 @@ def send_sms(text: str, to_phone: Optional[str] = None) -> Tuple[bool, str]:
         return False, f"Twilio SMS error: {exc}"
 
 
-# Twilio's built-in global WhatsApp Sandbox template ("Your appointment is coming up on {{1}} at {{2}}")
-_TWILIO_SANDBOX_FALLBACK_SID = "HXb5b62575e6e4ff6129ad7c8efe1f983e"
-
-
 def _ensure_whatsapp_template(client, clean_from: str = "") -> Tuple[Optional[str], Optional[str]]:
     """
     Find or auto-create a reusable Vocalyx Content Template (HX...) on paid Twilio accounts.
-    On Trial accounts (error 20003) or WhatsApp Sandbox (+14155238886), falls back to
-    Twilio's built-in pre-approved Sandbox template HX SID.
+    On Trial accounts (error 20003), Content API template creation is disabled by Twilio, so
+    callers must open a 24h Sandbox session or paste their Sandbox ContentSid (HX...) manually.
     """
     existing_sid = (_alerts_config.get("whatsapp", {}).get("content_sid") or "").strip()
     if existing_sid:
         return existing_sid, None
 
-    is_trial = False
     try:
         contents = client.content.v1.contents.list(limit=25)
         for rec in contents:
@@ -268,12 +263,7 @@ def _ensure_whatsapp_template(client, clean_from: str = "") -> Tuple[Optional[st
         err_s = str(list_err)
         print(f"[Alerts WhatsApp Content List Note]: {err_s}")
         if "20003" in err_s or "trial account" in err_s.lower():
-            is_trial = True
-
-    if is_trial:
-        if "14155238886" in (clean_from or ""):
-            return _TWILIO_SANDBOX_FALLBACK_SID, None
-        return None, "Twilio Trial accounts do not support Content API template creation (error 20003)."
+            return None, "Twilio Trial accounts cannot access Content API (error 20003)."
 
     try:
         from twilio.rest.content.v1.content import ContentList
@@ -304,10 +294,31 @@ def _ensure_whatsapp_template(client, clean_from: str = "") -> Tuple[Optional[st
         print(f"[Alerts WhatsApp] Auto-created Twilio Content Template SID: {sid}")
         return sid, None
     except Exception as create_err:
-        if "14155238886" in (clean_from or ""):
-            print(f"[Alerts WhatsApp] Falling back to Twilio Sandbox template ({create_err})")
-            return _TWILIO_SANDBOX_FALLBACK_SID, None
         return None, str(create_err)
+
+
+def _diagnose_whatsapp_sandbox_window(client, clean_from: str, clean_to: str) -> str:
+    """Check Twilio account message history to pinpoint Sandbox/account mismatch issues."""
+    sid = getattr(client, "account_sid", "") or ""
+    masked_sid = f"{sid[:6]}...{sid[-4:]}" if len(sid) > 10 else (sid or "unknown")
+    try:
+        inbound = client.messages.list(from_=clean_to, to=clean_from, limit=1)
+        if not inbound:
+            return (
+                f"Twilio account {masked_sid} has 0 inbound WhatsApp messages from {clean_to} to {clean_from}. "
+                f"Either your Sandbox session expired (re-send your 'join <2-word-code>' to {clean_from} and wait for 'You are all set!'), "
+                f"or your active Twilio Account SID ({masked_sid}) is a different Console project than the Sandbox you joined."
+            )
+        last_dt = getattr(inbound[0], "date_sent", None) or getattr(inbound[0], "date_created", None)
+        return (
+            f"Last inbound message to account {masked_sid} was at {last_dt}; if >24h ago, send 'hi' to {clean_from} to reopen the window, "
+            f"or paste your Sandbox Content Template SID (HX...) from Twilio Console -> Messaging -> Try it out -> Send a WhatsApp message."
+        )
+    except Exception:
+        return (
+            f"Verify in Twilio Console ({masked_sid}) -> Messaging -> Try it out -> Send a WhatsApp message that {clean_to} joined {clean_from}, "
+            f"or paste the Sandbox Content Template SID (HX...) into Alerts."
+        )
 
 
 def send_whatsapp(
@@ -385,13 +396,8 @@ def send_whatsapp(
                     for k, v in (template_vars or {}).items()
                     if v is not None
                 }
-                if resolved_content_sid == _TWILIO_SANDBOX_FALLBACK_SID:
-                    # Global sandbox template: "Your appointment is coming up on {{1}} at {{2}}"
-                    vars_payload.setdefault("1", compact_text[:140] or "Vocalyx Call Alert")
-                    vars_payload.setdefault("2", "Ready for follow-up")
-                else:
-                    vars_payload.setdefault("1", compact_text)
-                    vars_payload.setdefault("2", "Vocalyx Call Alert")
+                vars_payload.setdefault("1", compact_text)
+                vars_payload.setdefault("2", "Vocalyx Call Alert")
                 try:
                     message = client.messages.create(
                         from_=clean_from,
@@ -401,18 +407,14 @@ def send_whatsapp(
                     )
                     return True, f"WhatsApp alert sent via template {resolved_content_sid} (SID: {message.sid})"
                 except Exception as tpl_exc:
-                    return (
-                        False,
-                        f"Template {resolved_content_sid} send failed ({tpl_exc}). "
-                        f"If testing Twilio Sandbox, open Twilio Console -> Messaging -> Try it out -> Send a WhatsApp message, "
-                        f"send your 2-word 'join ...' code to {clean_from}, and verify {clean_to} is listed as a Sandbox Participant.",
-                    )
+                    diag = _diagnose_whatsapp_sandbox_window(client, clean_from, clean_to)
+                    return False, f"Template {resolved_content_sid} send failed ({tpl_exc}). {diag}"
 
+            diag = _diagnose_whatsapp_sandbox_window(client, clean_from, clean_to)
             return (
                 False,
                 f"Twilio blocked free-form WhatsApp ({body_exc}). "
-                f"Auto-template error: {auto_err or 'unavailable'}. "
-                f"Verify in Twilio Console that {clean_to} joined Sandbox {clean_from} and received 'You are all set!', or create a Content Template SID (HX...) in Twilio Console.",
+                f"{auto_err + ' ' if auto_err else ''}{diag}",
             )
     except Exception as exc:
         return False, f"Twilio WhatsApp error: {exc}"

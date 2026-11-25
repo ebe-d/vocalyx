@@ -13,24 +13,35 @@ sys.path = [
     p for p in sys.path if not p.startswith("/kaggle/input") and "/input/" not in p and p != ""
 ]
 
-# Directly and explicitly load tts_engine into sys.modules to prevent any lookup in read-only /kaggle/input
+# Reuse single tts_engine instance across __main__, main, and backend package imports
 import types
-_tts_file = os.path.join(_BACKEND_DIR, "tts_engine.py")
-if not os.path.exists(_tts_file):
-    _tts_file = os.path.join(_CURR_DIR, "tts_engine.py")
+_existing_tts = sys.modules.get("backend.tts_engine") or sys.modules.get("tts_engine")
+if _existing_tts is not None and hasattr(_existing_tts, "synthesize"):
+    _existing_tts.__package__ = "backend"
+    sys.modules["backend.tts_engine"] = _existing_tts
+    sys.modules["tts_engine"] = _existing_tts
+    if "backend" in sys.modules:
+        setattr(sys.modules["backend"], "tts_engine", _existing_tts)
+else:
+    _tts_file = os.path.join(_BACKEND_DIR, "tts_engine.py")
+    if not os.path.exists(_tts_file):
+        _tts_file = os.path.join(_CURR_DIR, "tts_engine.py")
 
-if os.path.exists(_tts_file):
-    try:
-        with open(_tts_file, "r") as _f:
-            _code = _f.read()
-        _tts_mod = types.ModuleType("backend.tts_engine")
-        _tts_mod.__file__ = _tts_file
-        exec(_code, _tts_mod.__dict__)
-        sys.modules["backend.tts_engine"] = _tts_mod
-        sys.modules["tts_engine"] = _tts_mod
-        print(f"[Startup] ✓ Directly loaded LuxTTS engine from {_tts_file} (synthesize: {hasattr(_tts_mod, 'synthesize')})")
-    except Exception as _e:
-        print(f"[Startup Error] Binding tts_engine: {_e}")
+    if os.path.exists(_tts_file):
+        try:
+            with open(_tts_file, "r") as _f:
+                _code = _f.read()
+            _tts_mod = types.ModuleType("backend.tts_engine")
+            _tts_mod.__file__ = _tts_file
+            _tts_mod.__package__ = "backend"
+            exec(_code, _tts_mod.__dict__)
+            sys.modules["backend.tts_engine"] = _tts_mod
+            sys.modules["tts_engine"] = _tts_mod
+            if "backend" in sys.modules:
+                setattr(sys.modules["backend"], "tts_engine", _tts_mod)
+            print(f"[Startup] ✓ Directly loaded TTS engine from {_tts_file} (synthesize: {hasattr(_tts_mod, 'synthesize')})")
+        except Exception as _e:
+            print(f"[Startup Error] Binding tts_engine: {_e}")
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, Response
 from fastapi.staticfiles import StaticFiles
@@ -603,7 +614,10 @@ def get_tts_prewarm_status(db: Session = Depends(get_db)):
     return {
         "ready": is_ready,
         "greeting_url": (active_v.preview_url if active_v and active_v.preview_url else "/tts_output/prewarmed_greeting.wav") if is_ready else None,
-        "model_loaded": getattr(tts_engine, "tts_model", None) is not None,
+        "model_loaded": any(
+            getattr(tts_engine, attr, None) is not None
+            for attr in ("f5_model", "lux_model", "chatterbox_model", "tts_model")
+        ),
         "device": str(getattr(tts_engine, "_device", "none")),
         "has_voice_clone": voice_status["has_voice_clone"],
         "active_voice_id": active_v.id if active_v else None,
@@ -728,6 +742,11 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
 
         wav_path = tts_engine.prewarm_engine(greeting_text, engine=active_engine, reference_audio=ref_audio)
         elapsed = time.time() - t0
+        print(
+            f"[TTS Pre-Warm Complete] engine={active_engine} persona={persona_name} "
+            f"f5_loaded={getattr(tts_engine, 'f5_model', None) is not None} "
+            f"lux_loaded={getattr(tts_engine, 'lux_model', None) is not None} ({elapsed:.2f}s)"
+        )
         return {
             "success": True,
             "ready": True,
@@ -1761,13 +1780,76 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
         return Response(content=safe_xml, media_type="application/xml")
 
 
+def _build_continue_twiml(public_url: str, call_sid: str, turn_id: str, hop: int, pause_len: int = 3) -> str:
+    """Build TwiML that briefly pauses and redirects Twilio to poll synthesized audio."""
+    from twilio.twiml.voice_response import VoiceResponse
+    vr = VoiceResponse()
+    vr.pause(length=pause_len)
+    vr.redirect(
+        f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop={hop}",
+        method="POST",
+    )
+    return str(vr)
+
+
+def _load_respond_call_context(contact_id, script_id_val, custom_context: str):
+    """Fetch contact memory, prior call summaries, and script text inside a short-lived DB session."""
+    from backend import database, models
+    contact_memory = {}
+    previous_calls_data = []
+    contact_preferred_lang = None
+    call_script_content = (custom_context or "").strip()
+
+    with database.SessionLocal() as db:
+        if contact_id:
+            try:
+                contact = db.query(models.Contact).filter(models.Contact.id == int(contact_id)).first()
+                if contact:
+                    contact_preferred_lang = getattr(contact, "preferred_language", None)
+                    contact_memory = {
+                        "name": contact.name,
+                        "phone_number": contact.phone_number,
+                        "notes": contact.notes,
+                        "last_topic": contact.last_topic,
+                        "interest_level": contact.interest_level,
+                        "concerns": contact.concerns,
+                        "commitments": contact.commitments,
+                    }
+                    past_calls = (
+                        db.query(models.Call)
+                        .filter(models.Call.contact_id == contact.id)
+                        .order_by(models.Call.created_at.desc())
+                        .limit(3)
+                        .all()
+                    )
+                    for pc in reversed(past_calls):
+                        previous_calls_data.append({
+                            "date": pc.created_at.strftime("%b %d") if pc.created_at else None,
+                            "summary": pc.summary,
+                            "outcome": pc.outcome,
+                        })
+            except Exception:
+                pass
+        if not call_script_content and script_id_val:
+            try:
+                s_obj = db.query(models.Script).filter(models.Script.id == int(script_id_val)).first()
+                if s_obj and s_obj.content:
+                    call_script_content = f"[Call Script: {s_obj.title}]\n{s_obj.content.strip()}"
+            except Exception:
+                pass
+
+    return contact_memory, previous_calls_data, contact_preferred_lang, call_script_content
+
+
 @app.api_route("/api/twilio/respond", methods=["GET", "POST"])
-async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)):
+async def twilio_respond_webhook(request: Request):
     """
     Twilio calls this when caller speech has been recognized by <Gather> or on silence redirect.
-    Runs RAG + Groq LLM + LuxTTS and returns next TwiML.
+    Runs RAG + Groq LLM + TTS and returns next TwiML, handing off cleanly if synthesis exceeds budget.
     """
-    from backend import twilio_service, rag_engine, llm_engine, models, config
+    import asyncio
+    t_req_start = time.monotonic()
+    from backend import twilio_service, rag_engine, llm_engine, config
     base_url = get_request_base_url(request)
 
     try:
@@ -1827,37 +1909,20 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
         call_state["silence_count"] = 0
         print(f"[Twilio Caller Speech] Call {call_sid}: '{speech_result}'")
 
-        contact = None
-        contact_memory = {}
-        previous_calls_data = []
-        if contact_id:
-            try:
-                contact = db.query(models.Contact).filter(models.Contact.id == contact_id).first()
-                if contact:
-                    contact_memory = {
-                        "name": contact.name,
-                        "phone_number": contact.phone_number,
-                        "notes": contact.notes,
-                        "last_topic": contact.last_topic,
-                        "interest_level": contact.interest_level,
-                        "concerns": contact.concerns,
-                        "commitments": contact.commitments,
-                    }
-                    past_calls = db.query(models.Call).filter(models.Call.contact_id == contact.id).order_by(models.Call.created_at.desc()).limit(3).all()
-                    for pc in reversed(past_calls):
-                        previous_calls_data.append({
-                            "date": pc.created_at.strftime("%b %d") if pc.created_at else None,
-                            "summary": pc.summary,
-                            "outcome": pc.outcome,
-                        })
-            except Exception:
-                pass
-
-        # Record user speech
+        # Record user speech and fetch DB context inside a short-lived synchronous helper
         call_state.setdefault("transcript", []).append({"role": "user", "text": speech_result})
         transcript_snapshot = list(call_state.get("transcript", []))
 
-        call_lang = call_state.get("language") or (getattr(contact, "preferred_language", "en-US") if contact else "en-US") or "en-US"
+        loop = asyncio.get_running_loop()
+        contact_memory, previous_calls_data, contact_preferred_lang, call_script_content = await loop.run_in_executor(
+            None,
+            _load_respond_call_context,
+            contact_id,
+            call_state.get("script_id"),
+            call_state.get("custom_context") or "",
+        )
+
+        call_lang = call_state.get("language") or contact_preferred_lang or "en-US"
         if call_lang in ("kn-IN", "kn"):
             call_engine = "kannada_male" if ("male" in (call_engine or "").lower() and "female" not in (call_engine or "").lower()) else "kannada_female"
             call_state["voice_engine"] = call_engine
@@ -1867,19 +1932,6 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
 
         call_ref_audio = call_state.get("reference_audio")
         call_persona = call_state.get("persona_name") or _get_voice_persona_name(None, call_engine)
-
-        call_script_content = (call_state.get("custom_context") or "").strip()
-        if not call_script_content and call_state.get("script_id"):
-            try:
-                s_obj = db.query(models.Script).filter(models.Script.id == int(call_state["script_id"])).first()
-                if s_obj and s_obj.content:
-                    call_script_content = f"[Call Script: {s_obj.title}]\n{s_obj.content.strip()}"
-            except Exception:
-                pass
-
-        import asyncio
-        t_req_start = time.monotonic()
-        loop = asyncio.get_event_loop()
 
         def _rag_and_llm():
             try:
@@ -1914,9 +1966,7 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
         wav_path = None
         is_cloned_engine = not any(k in (call_engine or "").lower() for k in ["polly", "say", "native"])
         if is_cloned_engine:
-            tts_mod = sys.modules.get("backend.tts_engine")
-            if tts_mod is None or not hasattr(tts_mod, "synthesize"):
-                from backend import tts_engine as tts_mod
+            from backend import tts_engine as tts_mod
 
             def _run_tts():
                 out = tts_mod.synthesize(agent_reply, reference_audio=call_ref_audio, engine=call_engine)
@@ -1926,33 +1976,31 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
 
             synth_future = loop.run_in_executor(None, _run_tts)
             twilio_service.pending_synth_futures[synth_key] = synth_future
-            remaining = 3.8 - (time.monotonic() - t_req_start)
-            if remaining <= 0.4:
-                from twilio.twiml.voice_response import VoiceResponse
-                public_url = twilio_service.resolve_base_url(base_url)
-                cont_url = f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop=1"
-                vr = VoiceResponse()
-                vr.pause(length=3)
-                vr.redirect(cont_url, method="POST")
-                print(f"[Twilio Webhook] Fast handoff to /api/twilio/continue after {time.monotonic() - t_req_start:.2f}s (turn={turn_id})")
-                return Response(content=str(vr), media_type="application/xml")
-            try:
-                wav_path = await asyncio.wait_for(asyncio.shield(synth_future), timeout=remaining)
+
+            model_cold = (
+                (call_engine or "").lower() in ("f5tts", "f5-tts", "f5")
+                and getattr(tts_mod, "f5_model", None) is None
+            )
+            deadline = t_req_start + (1.2 if model_cold else 3.4)
+            while not synth_future.done() and time.monotonic() < deadline:
+                await asyncio.sleep(0.08)
+
+            if synth_future.done():
                 twilio_service.pregenerated_audio.pop(synth_key, None)
                 twilio_service.pending_synth_futures.pop(synth_key, None)
-            except asyncio.TimeoutError:
-                from twilio.twiml.voice_response import VoiceResponse
+                try:
+                    wav_path = synth_future.result()
+                except Exception as synth_err:
+                    print(f"[Twilio Webhook] Synthesis note ({call_engine}): {synth_err}")
+                    wav_path = None
+            else:
                 public_url = twilio_service.resolve_base_url(base_url)
-                cont_url = f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop=1"
-                vr = VoiceResponse()
-                vr.pause(length=3)
-                vr.redirect(cont_url, method="POST")
-                print(f"[Twilio Webhook] Fast handoff to /api/twilio/continue after {time.monotonic() - t_req_start:.2f}s (turn={turn_id})")
-                return Response(content=str(vr), media_type="application/xml")
-            except Exception as synth_err:
-                twilio_service.pending_synth_futures.pop(synth_key, None)
-                print(f"[Twilio Webhook] Synthesis note ({call_engine}): {synth_err}")
-                wav_path = None
+                handoff_xml = _build_continue_twiml(public_url, call_sid, turn_id, hop=1, pause_len=3)
+                print(
+                    f"[Twilio Webhook] Fast handoff to /api/twilio/continue after "
+                    f"{time.monotonic() - t_req_start:.2f}s (turn={turn_id}, cold={model_cold})"
+                )
+                return Response(content=handoff_xml, media_type="application/xml")
 
         # Build TwiML directly with the synthesized audio or Polly speech
         twiml_xml = twilio_service.build_twiml(agent_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False, voice_engine=call_engine, reference_audio=call_ref_audio)
@@ -1975,7 +2023,6 @@ async def twilio_continue_webhook(request: Request):
     Waits cleanly within Twilio's HTTP limit, redirects once more if needed, then delivers audio.
     """
     import asyncio
-    from twilio.twiml.voice_response import VoiceResponse
     from backend import twilio_service, config
     base_url = get_request_base_url(request)
 
@@ -1996,9 +2043,9 @@ async def twilio_continue_webhook(request: Request):
     synth_key = f"{call_sid}:{turn_id}" if turn_id else call_sid
     pending_future = twilio_service.pending_synth_futures.get(synth_key) if turn_id else None
 
-    # Wait up to 3.8s per hop so every Twilio HTTP request returns well within Twilio/ngrok webhook limits
+    # Wait up to 3.2s per hop so every Twilio HTTP request returns well within Twilio/ngrok webhook limits
     wav_path = None
-    for _ in range(19):
+    for _ in range(16):
         wav_path = twilio_service.pregenerated_audio.pop(synth_key, None)
         if not wav_path and not turn_id:
             wav_path = twilio_service.pregenerated_audio.pop(call_sid, None)
@@ -2008,15 +2055,24 @@ async def twilio_continue_webhook(request: Request):
         wav_path = None
         if pending_future is not None and pending_future.done():
             twilio_service.pending_synth_futures.pop(synth_key, None)
+            try:
+                cand = pending_future.result()
+                if cand and os.path.exists(cand):
+                    wav_path = cand
+            except Exception as cont_err:
+                print(f"[Twilio Continue] Synthesis future error: {cont_err}")
             break
         await asyncio.sleep(0.2)
 
-    if (not wav_path or not os.path.exists(wav_path)) and hop < 3 and pending_future is not None and not pending_future.done():
+    print(
+        f"[Twilio Continue] Call {call_sid} turn={turn_id} hop={hop} "
+        f"wav_ready={bool(wav_path)} future_done={pending_future.done() if pending_future else 'none'}"
+    )
+
+    if (not wav_path or not os.path.exists(wav_path)) and hop < 4 and pending_future is not None and not pending_future.done():
         public_url = twilio_service.resolve_base_url(base_url)
-        vr = VoiceResponse()
-        vr.pause(length=2)
-        vr.redirect(f"{public_url}/api/twilio/continue?call_sid={call_sid}&turn={turn_id}&hop={hop + 1}", method="POST")
-        return Response(content=str(vr), media_type="application/xml")
+        handoff_xml = _build_continue_twiml(public_url, call_sid, turn_id, hop=hop + 1, pause_len=2)
+        return Response(content=handoff_xml, media_type="application/xml")
 
     if turn_id:
         twilio_service.pending_synth_futures.pop(synth_key, None)

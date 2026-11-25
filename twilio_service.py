@@ -379,10 +379,7 @@ def build_twiml(text: str, call_sid: str, base_url: str, wav_path: Optional[str]
         # Priority 3: Dynamic synthesis if text is provided and no audio ready yet
         if not chosen_wav and text:
             try:
-                import sys
-                tts_mod = sys.modules.get("backend.tts_engine")
-                if tts_mod is None or not hasattr(tts_mod, "synthesize"):
-                    from backend import tts_engine as tts_mod
+                from backend import tts_engine as tts_mod
                 ref_audio = reference_audio or call_info.get("reference_audio")
                 print(f"[Twilio TwiML] Synthesizing cloned voice response ({engine}, ref={ref_audio or 'default'}) for: '{text[:50]}...'")
                 chosen_wav = tts_mod.synthesize(text, reference_audio=ref_audio, engine=engine)
