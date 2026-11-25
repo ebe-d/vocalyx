@@ -80,6 +80,19 @@ async def startup():
                 if not os.path.exists(_dst_f):
                     shutil.copy2(_src_f, _dst_f)
             break
+    # Pre-load RAG embedder in background so the first live phone call is never blocked
+    try:
+        from backend import rag_engine as _rag
+        _rag.prewarm_embedder()
+    except Exception as _rpe:
+        print(f"[Startup] RAG prewarm note: {_rpe}")
+    # Seed default voices and sample script if the database is empty
+    try:
+        with next(get_db()) as _sdb:
+            seed_default_voices_if_needed(_sdb)
+            seed_default_script_if_needed(_sdb)
+    except Exception as _seed_err:
+        print(f"[Startup] Seed note: {_seed_err}")
     print("[Startup] Database and storage directories initialized. Server ready.")
 
 
@@ -977,6 +990,39 @@ def seed_default_voices_if_needed(db: Session):
         db.commit()
 
 
+def seed_default_script_if_needed(db: Session):
+    """Seed one clean sample call script if the scripts table is empty."""
+    if db.query(models.Script).count() > 0:
+        return
+    sample_script = models.Script(
+        title="Vocalyx Appointment & Demo Scheduler",
+        content="""CALL OBJECTIVE: Book a 20-minute product demo for Vocalyx AI calling platform.
+
+STEP 1 — QUALIFY (after caller responds to greeting):
+Acknowledge the caller warmly. Ask if this is a convenient time for a quick chat.
+
+STEP 2 — QUALIFY ROLE:
+Ask: "Are you currently handling sales or support calls for your team?"
+If YES → move to Step 3.
+If NO → politely ask who the right person might be, and offer to call back.
+
+STEP 3 — VALUE PITCH (keep under 2 sentences total):
+Mention that Vocalyx automates outbound calling with a cloned voice, handles scheduling, and logs every conversation automatically. Teams typically save 3 to 4 hours a day.
+
+STEP 4 — SCHEDULE DEMO:
+Ask: "Would a quick 20-minute demo this week work for you? We can do Tuesday or Wednesday afternoon."
+Confirm the date and time the caller suggests.
+
+STEP 5 — CLOSE:
+Confirm the booking, tell them you will send a calendar invite, and thank them warmly for their time.
+
+TONE: Professional, calm, concise. Never read these step labels aloud. Speak naturally as if you wrote every word yourself.""",
+    )
+    db.add(sample_script)
+    db.commit()
+    print("[Startup] Seeded default sample script: 'Vocalyx Appointment & Demo Scheduler'")
+
+
 @app.get("/api/voices")
 def list_voices(db: Session = Depends(get_db)):
     seed_default_voices_if_needed(db)
@@ -1758,13 +1804,28 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
             except Exception:
                 pass
 
-        # Synchronized initial greeting using selected persona & language
-        greeting = _build_greeting_text(
-            persona_name=persona_name,
-            contact_name=contact_name,
-            language=call_lang,
-            mode=mode,
-        )
+        # Synchronized initial greeting — use context-aware LLM greeting if a script/context is set,
+        # otherwise fall back to the localized template (which matches the pre-warmed audio exactly).
+        greeting = None
+        if call_custom_ctx:
+            try:
+                from backend import llm_engine as _llm
+                greeting = _llm.generate_context_greeting(
+                    persona_name=persona_name,
+                    contact_name=contact_name,
+                    script_content=call_custom_ctx,
+                    language=call_lang,
+                    mode=mode,
+                )
+            except Exception as _ge:
+                print(f"[Twilio Voice Webhook] Context greeting note: {_ge}")
+        if not greeting:
+            greeting = _build_greeting_text(
+                persona_name=persona_name,
+                contact_name=contact_name,
+                language=call_lang,
+                mode=mode,
+            )
 
         # Track in active calls
         if call_sid not in twilio_service.active_calls:
@@ -2093,7 +2154,7 @@ async def twilio_continue_webhook(request: Request):
         f"wav_ready={bool(wav_path)} future_done={pending_future.done() if pending_future else 'none'}"
     )
 
-    if (not wav_path or not os.path.exists(wav_path)) and hop < 3 and pending_future is not None and not pending_future.done():
+    if (not wav_path or not os.path.exists(wav_path)) and hop < 4 and pending_future is not None and not pending_future.done():
         public_url = twilio_service.resolve_base_url(base_url)
         handoff_xml = _build_continue_twiml(public_url, call_sid, turn_id, hop=hop + 1, pause_len=3)
         return Response(content=handoff_xml, media_type="application/xml")

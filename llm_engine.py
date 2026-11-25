@@ -206,10 +206,18 @@ def get_chat_response(
 
     # Active call script & live caller status/context (highest operational priority)
     if script_content and script_content.strip():
+        # Strip placeholder tokens from the script before injecting (prevents TTS reading [Name], XYZ etc.)
+        import re as _re
+        clean_script = _re.sub(r'\[[^\]]{1,40}\]', '', script_content)
+        clean_script = _re.sub(r'<[^>]{1,40}>', '', clean_script)
+        clean_script = _re.sub(r'\{[^}]{1,40}\}', '', clean_script)
+        clean_script = _re.sub(r'\s{2,}', ' ', clean_script).strip()
         system_parts.append(
             "\nMANDATORY CALL SCRIPT & CALLER CONTEXT — You MUST follow the context, caller's previous position/status, and script steps below on every turn. "
-            "Check the conversation history so you advance cleanly without repeating finished steps, and prioritize these instructions over generic defaults:\n"
-            f"{script_content.strip()}"
+            "Check the conversation history so you advance cleanly without repeating finished steps, and prioritize these instructions over generic defaults. "
+            "CRITICAL: Your reply must contain ONLY natural spoken words. Never output template placeholders like [Name], [Company], XYZ, ABC, <Bracket>, or {variable}. "
+            "If you need a name and don't have it, use the contact's real name from memory or say 'you' instead:\n"
+            f"{clean_script}"
         )
 
     if rag_context:
@@ -273,6 +281,28 @@ def get_chat_response(
     return completion.choices[0].message.content.strip()
 
 
+def _sanitize_greeting(text: str) -> Optional[str]:
+    """
+    Strip any placeholder tokens that TTS would read literally,
+    e.g. [Name], [Company], XYZ, ABC, <Contact>, {variable}.
+    Returns None if the sanitised result is too short to use.
+    """
+    import re
+    if not text:
+        return None
+    # Remove bracketed / angle-bracketed / curly-braced placeholders
+    cleaned = re.sub(r'\[[^\]]{1,40}\]', '', text)
+    cleaned = re.sub(r'<[^>]{1,40}>', '', cleaned)
+    cleaned = re.sub(r'\{[^}]{1,40}\}', '', cleaned)
+    # Remove standalone ALL-CAPS junk tokens like XYZ, ABC, COMPANY, NAME
+    cleaned = re.sub(r'\b[A-Z]{2,6}\b', '', cleaned)
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip().strip(',').strip('.').strip()
+    # Must be a usable sentence (at least 5 words)
+    if len(cleaned.split()) < 5:
+        return None
+    return cleaned
+
+
 def generate_context_greeting(
     persona_name: str = "Alex",
     contact_name: str = "there",
@@ -287,7 +317,9 @@ def generate_context_greeting(
     extra_lang = f" Respond strictly in {lang_name} using native script if Hindi/Kannada." if language not in ("en-US", "en-IN", "") else ""
     prompt = (
         f"You are {persona_name} starting a live {mode} phone call with {contact_name}. "
-        f"Write ONLY the very first opening line (1 short natural sentence, under 24 words) following the call script/context below.{extra_lang}\n\n"
+        f"Write ONLY the very first opening line (1 short natural sentence, under 24 words) following the call script/context below.{extra_lang}\n"
+        "CRITICAL: Use ONLY real words. Never output placeholder tokens like [Name], [Company], XYZ, ABC, "
+        "<Contact>, or any bracketed / ALL-CAPS template variable. Use the contact's actual name if known.\n\n"
         f"Context/Script:\n{script_content.strip()}"
     )
     try:
@@ -296,7 +328,8 @@ def generate_context_greeting(
             messages=[{"role": "system", "content": prompt}],
             timeout=5.0,
         )
-        out = (completion.choices[0].message.content or "").strip().strip('"').strip("'")
+        raw = (completion.choices[0].message.content or "").strip().strip('"').strip("'")
+        out = _sanitize_greeting(raw)
         return out if out else None
     except Exception:
         return None

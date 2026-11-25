@@ -3144,7 +3144,8 @@ const voicePrewarmManager = {
 
   getSignature() {
     const ctx = this.getSelectedContext();
-    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|outbound`;
+    const scriptId = document.getElementById('phone-script-select')?.value || '';
+    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|outbound|${scriptId}`;
   },
 
   isWarmedForCurrent() {
@@ -3876,6 +3877,10 @@ function bindEvents() {
       badge.textContent = sid ? 'Script + Context' : 'Editable';
     }
     if (sid) toast.info('Loaded script into Call Context — edit anything before dialing.');
+    // Script changed → greeting will be different, must Re-Warm before dialing
+    if (typeof voicePrewarmManager !== 'undefined') {
+      voicePrewarmManager.invalidate('Script changed — click Re-Warm before dialing.');
+    }
   });
 
   document.getElementById('btn-phone-ctx-reset')?.addEventListener('click', () => {

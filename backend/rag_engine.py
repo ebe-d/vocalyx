@@ -94,7 +94,23 @@ def add_document(filepath: str) -> None:
         _index_chunks.extend(chunks)
 
 
-def search(query: str, top_k: int = 3) -> str:
+def prewarm_embedder() -> None:
+    """
+    Pre-load the sentence-transformer model in a background thread at startup.
+    Call this once from the FastAPI startup event so the first live call doesn't
+    block waiting for a ~470 MB model download.
+    """
+    import threading
+    def _load():
+        try:
+            get_embedder()
+            print("[RAG] ✓ Embedder pre-loaded at startup (live calls will not block).")
+        except Exception as _e:
+            print(f"[RAG] Embedder pre-load note: {_e}")
+    threading.Thread(target=_load, daemon=True).start()
+
+
+def search(query: str, top_k: int = 3, timeout: float = 1.5) -> str:
     """
     Search the FAISS index for chunks relevant to *query*.
 
@@ -104,25 +120,42 @@ def search(query: str, top_k: int = 3) -> str:
         The search query string.
     top_k : int
         Number of top results to return.
+    timeout : float
+        Maximum seconds to wait for the embedder (default 1.5 s so live
+        phone calls are never blocked by a slow/cold model load).
 
     Returns
     -------
     str
         Concatenated relevant text chunks, or an empty string if the index
-        is empty.
+        is empty or the embedder is not yet ready within *timeout*.
     """
-    with _lock:
-        if _index.ntotal == 0:
-            return ""
+    import concurrent.futures
+    # Fast path: nothing indexed yet → skip entirely
+    if _index.ntotal == 0:
+        return ""
 
-        embedder = get_embedder()
-        query_embedding = embedder.encode([query], convert_to_numpy=True).astype(np.float32)
-        actual_k = min(top_k, _index.ntotal)
-        _, indices = _index.search(query_embedding, actual_k)
+    def _do_search():
+        with _lock:
+            if _index.ntotal == 0:
+                return ""
+            embedder = get_embedder()
+            query_embedding = embedder.encode([query], convert_to_numpy=True).astype(np.float32)
+            actual_k = min(top_k, _index.ntotal)
+            _, indices = _index.search(query_embedding, actual_k)
+            results = []
+            for idx in indices[0]:
+                if 0 <= idx < len(_index_chunks):
+                    results.append(_index_chunks[idx])
+            return "\n\n".join(results)
 
-        results = []
-        for idx in indices[0]:
-            if 0 <= idx < len(_index_chunks):
-                results.append(_index_chunks[idx])
-
-    return "\n\n".join(results)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_do_search)
+            return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        print(f"[RAG] search() timed out after {timeout}s — skipping for this turn.")
+        return ""
+    except Exception as _e:
+        print(f"[RAG] search() error: {_e}")
+        return ""
