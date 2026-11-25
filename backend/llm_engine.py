@@ -200,17 +200,19 @@ def get_chat_response(
         f"You are {persona}, a calm, articulate, and professional representative on a live telephone conversation. "
         "Never say or imply that you are an AI, a robot, an assistant, or a language model. "
         "Speak in a natural, polite, composed, and formal business tone. "
-        "Do not use exclamation marks, hyperactive enthusiasm, sales hype, or casual slang. "
+        "Do not use exclamation marks, hyperactive enthusiasm, sales hype, semicolons, slashes, or casual slang. "
+        "Write times, dates, and numbers in natural spoken words (for example say 'one in the afternoon' instead of '1 p.m.' and 'September eighth' instead of '8/9') so the voice synthesizer pronounces every word clearly. "
         f"Keep your response to 1 short, crisp spoken sentence (under 22 words whenever possible) so it sounds natural and responsive over the phone.{lang_instruction}",
     ]
 
     # Active call script & live caller status/context (highest operational priority)
     if script_content and script_content.strip():
-        # Strip placeholder tokens from the script before injecting (prevents TTS reading [Name], XYZ etc.)
+        # Strip explicit placeholder tokens from the script before injecting (prevents TTS reading [Name], XYZ etc.)
         import re as _re
         clean_script = _re.sub(r'\[[^\]]{1,40}\]', '', script_content)
         clean_script = _re.sub(r'<[^>]{1,40}>', '', clean_script)
         clean_script = _re.sub(r'\{[^}]{1,40}\}', '', clean_script)
+        clean_script = _re.sub(r'\b(?:[Xx][Yy][Zz]|[Xx]{3,}|[Aa][Bb][Cc]\s+Company)\b', '', clean_script)
         clean_script = _re.sub(r'\s{2,}', ' ', clean_script).strip()
         system_parts.append(
             "\nMANDATORY CALL SCRIPT & CALLER CONTEXT — You MUST follow the context, caller's previous position/status, and script steps below on every turn. "
@@ -283,22 +285,24 @@ def get_chat_response(
 
 def _sanitize_greeting(text: str) -> Optional[str]:
     """
-    Strip any placeholder tokens that TTS would read literally,
-    e.g. [Name], [Company], XYZ, ABC, <Contact>, {variable}.
-    Returns None if the sanitised result is too short to use.
+    Strip placeholder tokens that TTS would read literally
+    (e.g. [Name], [Company], XYZ, ABC, <Contact>, {variable})
+    while preserving legitimate words/acronyms like AI, US, CRM, PM.
     """
     import re
     if not text:
         return None
-    # Remove bracketed / angle-bracketed / curly-braced placeholders
     cleaned = re.sub(r'\[[^\]]{1,40}\]', '', text)
     cleaned = re.sub(r'<[^>]{1,40}>', '', cleaned)
     cleaned = re.sub(r'\{[^}]{1,40}\}', '', cleaned)
-    # Remove standalone ALL-CAPS junk tokens like XYZ, ABC, COMPANY, NAME
-    cleaned = re.sub(r'\b[A-Z]{2,6}\b', '', cleaned)
-    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip().strip(',').strip('.').strip()
-    # Must be a usable sentence (at least 5 words)
-    if len(cleaned.split()) < 5:
+    cleaned = re.sub(
+        r'\b(?:[Xx][Yy][Zz]|x\.y\.z\.|[Xx]{3,}|ABC\s*(?:Corp|Company|Inc)?|ACME|PLACEHOLDER|TBD)\b',
+        '',
+        cleaned,
+    )
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned)
+    cleaned = re.sub(r'\s+([.,?!])', r'\1', cleaned).strip().strip(',').strip()
+    if len(cleaned.split()) < 4:
         return None
     return cleaned
 

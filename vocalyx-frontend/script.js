@@ -3142,10 +3142,13 @@ const voicePrewarmManager = {
     return { engine, voiceId, voiceObj, language, contactId, contactName };
   },
 
+  warmedBootId: null,
+
   getSignature() {
     const ctx = this.getSelectedContext();
     const scriptId = document.getElementById('phone-script-select')?.value || '';
-    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|outbound|${scriptId}`;
+    const ctxText = (document.getElementById('phone-call-context')?.value || '').trim().replace(/\s+/g, ' ');
+    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|outbound|${scriptId}|${ctxText}`;
   },
 
   isWarmedForCurrent() {
@@ -3223,6 +3226,19 @@ const voicePrewarmManager = {
     if (!badge) return;
     try {
       const res = await api.getPrewarmStatus();
+      if (res) {
+        // Detect backend restart so browser never dials blindly with stale in-browser prewarm state
+        if (this.warmedBootId && res.boot_id && this.warmedBootId !== res.boot_id) {
+          this.invalidate('Server restarted — click Re-Warm before dialing.');
+          if (typeof simPrewarm !== 'undefined') simPrewarm.invalidate('Server restarted — click Re-Warm before Start Call.');
+          return;
+        }
+        if (this.isReady && res.model_loaded === false) {
+          this.invalidate('Model cold after restart — click Re-Warm before dialing.');
+          if (typeof simPrewarm !== 'undefined') simPrewarm.invalidate('Server restarted — click Re-Warm before Start Call.');
+          return;
+        }
+      }
       if (res && res.ready) {
         this.activeVoiceId = res.active_voice_id ? String(res.active_voice_id) : this.activeVoiceId;
         if (this.isWarmedForCurrent() && res.greeting_url) {
@@ -3271,6 +3287,7 @@ const voicePrewarmManager = {
       if (res && res.ready) {
         this.isReady = true;
         this.warmedSignature = sig;
+        this.warmedBootId = res.boot_id || null;
         this.warmedData = res;
         this.greetingUrl = res.greeting_url || null;
         this.activeVoiceId = res.voice_id ? String(res.voice_id) : (voiceId || null);
@@ -3377,7 +3394,9 @@ const simPrewarm = {
 
   getSignature() {
     const ctx = this.getSelectedContext();
-    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|${ctx.mode}`;
+    const scriptId = document.getElementById('sim-script-select')?.value || '';
+    const ctxText = (document.getElementById('sim-call-context')?.value || '').trim().replace(/\s+/g, ' ');
+    return `${ctx.engine}|${ctx.voiceId}|${ctx.language}|${ctx.contactId}|${ctx.mode}|${scriptId}|${ctxText}`;
   },
 
   isWarmedForCurrent() {
@@ -3484,6 +3503,7 @@ const simPrewarm = {
       if (res && res.ready) {
         this.isReady = true;
         this.warmedSignature = sig;
+        this.warmedBootId = res.boot_id || null;
         this.warmedData = res;
         this.greetingUrl = res.greeting_url || null;
         this.activeVoiceId = res.voice_id ? String(res.voice_id) : (voiceId || null);
@@ -3883,6 +3903,12 @@ function bindEvents() {
     }
   });
 
+  document.getElementById('phone-call-context')?.addEventListener('input', () => {
+    if (typeof voicePrewarmManager !== 'undefined' && voicePrewarmManager.isReady) {
+      voicePrewarmManager.invalidate('Context edited — click Re-Warm before dialing.');
+    }
+  });
+
   document.getElementById('btn-phone-ctx-reset')?.addEventListener('click', () => {
     const cid = document.getElementById('phone-contact-select')?.value || '';
     const ctxBox = document.getElementById('phone-call-context');
@@ -3895,6 +3921,9 @@ function bindEvents() {
       const sid = document.getElementById('phone-script-select')?.value || '';
       if (sid) applyScriptIntoTextarea(ctxBox, sid);
       toast.success('Loaded latest contact status & call history.');
+      if (typeof voicePrewarmManager !== 'undefined' && voicePrewarmManager.isReady) {
+        voicePrewarmManager.invalidate('Context reset — click Re-Warm before dialing.');
+      }
     }
   });
 
@@ -3905,6 +3934,9 @@ function bindEvents() {
     if (ctxBox) ctxBox.value = '';
     if (scSel) scSel.value = '';
     if (badge) { badge.className = 'badge badge-grey'; badge.textContent = 'Editable'; }
+    if (typeof voicePrewarmManager !== 'undefined' && voicePrewarmManager.isReady) {
+      voicePrewarmManager.invalidate('Context cleared — click Re-Warm before dialing.');
+    }
   });
 
   document.getElementById('btn-phone-ctx-save')?.addEventListener('click', async () => {
@@ -3936,6 +3968,15 @@ function bindEvents() {
     }
     if (sid) {
       toast.info('Script loaded into Simulator Context — AI will follow these instructions.');
+    }
+    if (typeof simPrewarm !== 'undefined') {
+      simPrewarm.invalidate('Script changed — click Re-Warm before Start Call.');
+    }
+  });
+
+  document.getElementById('sim-call-context')?.addEventListener('input', () => {
+    if (typeof simPrewarm !== 'undefined' && simPrewarm.isReady) {
+      simPrewarm.invalidate('Context edited — click Re-Warm before Start Call.');
     }
   });
 

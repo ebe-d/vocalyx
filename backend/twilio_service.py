@@ -171,6 +171,106 @@ def resolve_base_url(request_base: str = None) -> str:
     return "https://ebedsouza-vocalyx.hf.space"
 
 
+def build_greeting_text(
+    persona_name: str = "Alex",
+    contact_name: str = "there",
+    language: str = "en-US",
+    mode: str = "outbound",
+) -> str:
+    """Build synchronized greeting text used identically in chat UI, pre-warm audio, and Twilio calls."""
+    persona = (persona_name or "Alex").strip() or "Alex"
+    cname = (contact_name or "").strip() or "there"
+    lang = (language or "en-US").strip()
+    m = (mode or "outbound").strip().lower()
+
+    if lang in ("kn-IN", "kn"):
+        kn_name = cname if cname != "there" else "ಸ್ನೇಹಿತರೆ"
+        if m == "inbound":
+            return (
+                f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ, ನಾನು {persona}. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?"
+                if cname != "there"
+                else f"ನಮಸ್ಕಾರ, ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ! ನನ್ನ ಹೆಸರು {persona}. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಲ್ಲೆನು?"
+            )
+        if m == "marketing":
+            return f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ {persona} ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಒಂದು ನಿಮಿಷ ಸಮಯವಿದೆಯೇ?"
+        return f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ {persona} ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಹೇಗಿದ್ದೀರಾ?"
+
+    if lang in ("hi-IN", "hi"):
+        hi_name = cname if cname != "there" else "जी"
+        if m == "inbound":
+            return (
+                f"नमस्ते {hi_name}! वोकलिक्स में आपका स्वागत है, मैं {persona} बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?"
+                if cname != "there"
+                else f"नमस्ते, वोकलिक्स में आपका स्वागत है! मेरा नाम {persona} है। मैं आपकी क्या मदद कर सकता हूँ?"
+            )
+        if m == "marketing":
+            return f"नमस्ते {hi_name}! वोकलिक्स से {persona} बोल रहा हूँ। क्या आपके पास एक मिनट का समय है?"
+        return f"नमस्ते {hi_name}! वोकलिक्स से {persona} बोल रहा हूँ। आप कैसे हैं?"
+
+    if m == "inbound":
+        if cname != "there":
+            return f"Hello {cname}. Thank you for calling Vocalyx, this is {persona}. How can I help you today?"
+        return f"Hello, thank you for calling Vocalyx. My name is {persona}. How may I assist you today?"
+    if m == "marketing":
+        return f"Hi {cname}. This is {persona} calling from Vocalyx with an update for you. Do you have a quick minute?"
+    return f"Hello {cname}. This is {persona} calling from Vocalyx. How are you doing today?"
+
+
+def compute_greeting_signature(
+    voice_engine: Optional[str] = None,
+    voice_id: Optional[Any] = None,
+    language: Optional[str] = None,
+    contact_id: Optional[Any] = None,
+    mode: Optional[str] = None,
+    script_id: Optional[Any] = None,
+    custom_context: Optional[str] = None,
+    persona_name: Optional[str] = None,
+) -> str:
+    """Deterministic signature tying a pre-warmed greeting WAV to its exact call parameters."""
+    import hashlib
+    norm_ctx = re.sub(r"\s+", " ", (custom_context or "").strip())
+    ctx_hash = hashlib.sha1(norm_ctx.encode("utf-8")).hexdigest()[:12] if norm_ctx else ""
+    parts = [
+        str(voice_engine or "f5tts").strip().lower(),
+        str(voice_id or "").strip(),
+        str(language or "en-US").strip(),
+        str(contact_id or "").strip(),
+        str(mode or "outbound").strip().lower(),
+        str(script_id or "").strip(),
+        str(persona_name or "").strip().lower(),
+        ctx_hash,
+    ]
+    return "|".join(parts)
+
+
+def _prewarm_meta_path() -> str:
+    return os.path.join(config.TTS_OUTPUT_DIR, "prewarmed_greeting.meta.json")
+
+
+def get_prewarm_meta() -> Dict[str, Any]:
+    """Read metadata describing what prewarmed_greeting.wav was synthesized for."""
+    meta_file = _prewarm_meta_path()
+    if os.path.exists(meta_file):
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def save_prewarm_meta(meta: Dict[str, Any]) -> None:
+    """Persist metadata describing the current prewarmed_greeting.wav."""
+    try:
+        os.makedirs(config.TTS_OUTPUT_DIR, exist_ok=True)
+        with open(_prewarm_meta_path(), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    except Exception as _me:
+        print(f"[Twilio Pre-Warm Meta Note]: {_me}")
+
+
 def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: str = "outbound", base_url: str = None, voice_engine: Optional[str] = None, language: Optional[str] = None, voice_id: Optional[int] = None, reference_audio: Optional[str] = None, persona_name: Optional[str] = None, script_id: Optional[int] = None, custom_context: Optional[str] = None) -> Dict[str, Any]:
     if not is_configured():
         raise RuntimeError("Twilio is not configured. Please enter your Account SID, Auth Token, and Phone Number in Settings.")
@@ -202,6 +302,79 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
     if contact_id:
         status_callback += f"?contact_id={contact_id}"
 
+    active_engine = (voice_engine or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")).lower()
+    active_persona = (persona_name or ("Joanna" if "joanna" in active_engine else "Matthew" if "matthew" in active_engine else "Sapna" if "kannada_female" in active_engine else "Gagan" if "kannada_male" in active_engine else "Swara" if "hindi_female" in active_engine else "Madhur" if "hindi_male" in active_engine else "Alex")).strip() or "Alex"
+    eff_lang = language or "en-US"
+    clean_custom_ctx = (custom_context or "").strip()
+
+    # Prepare exact greeting text + audio BEFORE dialing so audio and chat text NEVER disagree
+    # and different contacts / scripts always receive their own tailored greeting.
+    cname = "there"
+    if contact_id:
+        try:
+            from backend import database, models
+            with database.SessionLocal() as session:
+                c = session.query(models.Contact).filter(models.Contact.id == int(contact_id)).first()
+                if c and c.name:
+                    cname = c.name
+        except Exception:
+            pass
+
+    target_sig = compute_greeting_signature(
+        voice_engine=active_engine,
+        voice_id=voice_id,
+        language=eff_lang,
+        contact_id=contact_id,
+        mode=mode,
+        script_id=script_id,
+        custom_context=clean_custom_ctx,
+        persona_name=active_persona,
+    )
+    prewarmed_file = os.path.join(config.TTS_OUTPUT_DIR, "prewarmed_greeting.wav")
+    has_prewarmed = os.path.exists(prewarmed_file) and os.path.getsize(prewarmed_file) > 1000
+    prewarm_meta = get_prewarm_meta()
+    sig_matches = bool(has_prewarmed and prewarm_meta.get("signature") == target_sig and prewarm_meta.get("text"))
+
+    prepared_greeting_text = None
+    prepared_greeting_wav = None
+
+    if sig_matches:
+        prepared_greeting_text = prewarm_meta["text"]
+        prepared_greeting_wav = prewarmed_file
+        print(f"[Twilio Pre-Gen] ✓ Pre-warmed greeting signature matched for {cname} (0.0s overhead).")
+    else:
+        # Generate contact + script specific greeting text once, and lock it to both audio and transcript
+        if clean_custom_ctx:
+            try:
+                from backend import llm_engine
+                prepared_greeting_text = llm_engine.generate_context_greeting(
+                    persona_name=active_persona,
+                    contact_name=cname,
+                    script_content=clean_custom_ctx,
+                    language=eff_lang,
+                    mode=mode,
+                )
+            except Exception as _ge:
+                print(f"[Twilio Pre-Gen Context Greeting Note]: {_ge}")
+        if not prepared_greeting_text:
+            prepared_greeting_text = build_greeting_text(
+                persona_name=active_persona,
+                contact_name=cname,
+                language=eff_lang,
+                mode=mode,
+            )
+
+        if active_engine not in ["polly", "twilio_say", "say"]:
+            try:
+                from backend import tts_engine
+                print(f"[Twilio Pre-Gen] Generating personalized {active_engine} ({active_persona}) greeting for {cname}...")
+                w_path = tts_engine.synthesize(prepared_greeting_text, reference_audio=reference_audio, engine=active_engine)
+                if w_path and os.path.exists(w_path):
+                    prepared_greeting_wav = w_path
+                    print(f"[Twilio Pre-Gen] ✓ Personalized greeting ready: {os.path.basename(w_path)}")
+            except Exception as pe:
+                print(f"[Twilio Pre-Gen Note]: {pe}")
+
     print(f"[Twilio] Dialing {to_formatted} from {from_formatted} via {voice_url}")
 
     try:
@@ -230,12 +403,10 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
             ) from call_err
         raise RuntimeError(f"Twilio call failed: {err_msg}") from call_err
 
-    active_engine = (voice_engine or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")).lower()
-    active_persona = (persona_name or ("Joanna" if "joanna" in active_engine else "Matthew" if "matthew" in active_engine else "Sapna" if "kannada_female" in active_engine else "Gagan" if "kannada_male" in active_engine else "Swara" if "hindi_female" in active_engine else "Madhur" if "hindi_male" in active_engine else "Alex")).strip() or "Alex"
-
     active_calls[call.sid] = {
         "call_sid": call.sid,
         "contact_id": contact_id,
+        "contact_name": cname,
         "to_number": to_formatted,
         "from_number": from_formatted,
         "mode": mode,
@@ -246,57 +417,16 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
         "voice_id": voice_id,
         "reference_audio": reference_audio,
         "persona_name": active_persona,
-        "language": language or "en-US",
+        "language": eff_lang,
         "script_id": script_id,
-        "custom_context": (custom_context or "").strip(),
+        "custom_context": clean_custom_ctx,
+        "greeting_text": prepared_greeting_text,
     }
 
-    # Pre-generate cloned voice greeting directly inside call initiation context
-    if active_engine not in ["polly", "twilio_say", "say"]:
-        try:
-            from backend import tts_engine, database, models
-
-            # Fast check: If pre-warmed greeting exists on disk, map it IMMEDIATELY so webhook responds in 0.005s
-            prewarmed_file = os.path.join(config.TTS_OUTPUT_DIR, "prewarmed_greeting.wav")
-            has_prewarmed = os.path.exists(prewarmed_file) and os.path.getsize(prewarmed_file) > 1000
-            if has_prewarmed:
-                pregenerated_audio[call.sid] = prewarmed_file
-                pregenerated_audio[to_formatted] = prewarmed_file
-                if contact_id:
-                    pregenerated_audio[str(contact_id)] = prewarmed_file
-                print(f"[Twilio Pre-Gen] ✓ Immediately mapped pre-warmed cloned greeting to call {call.sid}")
-
-            cname = "there"
-            if contact_id:
-                with database.SessionLocal() as session:
-                    c = session.query(models.Contact).filter(models.Contact.id == int(contact_id)).first()
-                    if c:
-                        cname = c.name
-
-            # If contact has generic name and prewarmed exists, no further greeting generation needed
-            if cname == "there" and has_prewarmed:
-                print(f"[Twilio Pre-Gen] Generic greeting already warm for {to_formatted}. Zero latency guaranteed.")
-            elif not has_prewarmed:
-                if mode == "marketing":
-                    g_text = f"Hi {cname}! This is {active_persona} calling from Vocalyx with an exciting update for you. Do you have a quick minute?"
-                else:
-                    g_text = f"Hello {cname}! This is {active_persona} calling from Vocalyx. How are you doing today?"
-
-                print(f"[Twilio Pre-Gen] Generating {active_engine} ({active_persona}) greeting for {cname}...")
-                w_path = tts_engine.synthesize(g_text, reference_audio=reference_audio, engine=active_engine)
-                if w_path and os.path.exists(w_path):
-                    pregenerated_audio[call.sid] = w_path
-                    if contact_id:
-                        pregenerated_audio[str(contact_id)] = w_path
-                    pregenerated_audio[to_formatted] = w_path
-                    try:
-                        import shutil
-                        shutil.copy2(w_path, prewarmed_file)
-                    except Exception:
-                        pass
-                    print(f"[Twilio Pre-Gen] ✓ {active_engine} greeting ready for {call.sid}: {os.path.basename(w_path)}")
-        except Exception as pe:
-            print(f"[Twilio Pre-Gen Note]: {pe}")
+    if prepared_greeting_wav and os.path.exists(prepared_greeting_wav):
+        pregenerated_audio[call.sid] = prepared_greeting_wav
+    else:
+        pregenerated_audio.pop(call.sid, None)
 
     return {
         "success": True,
@@ -366,15 +496,19 @@ def build_twiml(text: str, call_sid: str, base_url: str, wav_path: Optional[str]
         if not chosen_wav:
             chosen_wav = pregenerated_audio.pop(call_sid, None)
 
-        # Priority 2: For greeting, check contact/number mapping or prewarmed_greeting.wav (English only)
+        # Priority 2: For greeting (e.g. inbound), ONLY reuse prewarmed_greeting.wav if its text matches
         if not chosen_wav and is_greeting:
-            cid = str(call_info.get("contact_id") or "")
-            chosen_wav = pregenerated_audio.pop(cid, None) or pregenerated_audio.pop(to_num, None)
-            if not chosen_wav and call_language in ("en-US", "en-IN", ""):
-                prewarmed_file = os.path.join(config.TTS_OUTPUT_DIR, "prewarmed_greeting.wav")
-                if os.path.exists(prewarmed_file) and os.path.getsize(prewarmed_file) > 1000:
-                    chosen_wav = prewarmed_file
-                    print(f"[Twilio TwiML] ✓ Using Pre-Warmed Cloned Voice greeting ({engine}) for {call_sid}")
+            prewarmed_file = os.path.join(config.TTS_OUTPUT_DIR, "prewarmed_greeting.wav")
+            meta = get_prewarm_meta()
+            if (
+                os.path.exists(prewarmed_file)
+                and os.path.getsize(prewarmed_file) > 1000
+                and meta.get("text")
+                and text
+                and meta.get("text").strip() == text.strip()
+            ):
+                chosen_wav = prewarmed_file
+                print(f"[Twilio TwiML] ✓ Using text-verified Pre-Warmed Cloned Voice greeting ({engine}) for {call_sid}")
 
         # Priority 3: Dynamic synthesis if text is provided and no audio ready yet
         if not chosen_wav and text:

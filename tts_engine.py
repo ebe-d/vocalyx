@@ -476,6 +476,41 @@ def _synthesize_chatterbox(text: str, reference_audio: str = None, exaggeration:
 # ---------------------------------------------------------------------------
 f5_model = None
 
+
+def prewarm_model(engine: str = None, reference_audio: str = None) -> None:
+    """
+    Pre-load the active TTS model (F5-TTS / LuxTTS) and warm the default
+    reference transcript cache in a background daemon thread at server startup.
+    Prevents the first live call from waiting 15-30s for model + Whisper load.
+    """
+    import threading
+
+    cfg_engine = getattr(config, "TWILIO_VOICE_ENGINE", None) if config else None
+    target = (engine or cfg_engine or os.getenv("TTS_ENGINE", "f5tts")).lower()
+
+    def _load():
+        try:
+            t0 = time.time()
+            if target in ("f5tts", "f5-tts", "f5"):
+                model = get_f5_model()
+                try:
+                    resolved = _resolve_reference_audio(reference_audio)
+                    clean_ref = _prepare_clean_f5_reference(resolved)
+                    _ensure_f5_ref_transcript(model, clean_ref)
+                except Exception as _re:
+                    print(f"[TTS Prewarm] Reference transcript cache note: {_re}")
+                print(f"[TTS Prewarm] ✓ F5-TTS model & ref cache pre-loaded in {time.time()-t0:.1f}s — first call will NOT cold-start.")
+            elif target in ("luxtts", "lux"):
+                get_luxtts_model()
+                print(f"[TTS Prewarm] ✓ LuxTTS model pre-loaded in {time.time()-t0:.1f}s.")
+            else:
+                print(f"[TTS Prewarm] Engine '{target}' needs no model pre-load.")
+        except Exception as _e:
+            print(f"[TTS Prewarm] Model load note (non-fatal): {_e}")
+
+    threading.Thread(target=_load, daemon=True, name="tts-prewarm").start()
+
+
 def get_f5_model():
     """Lazily load F5-TTS model inside active GPU context."""
     global f5_model
@@ -504,33 +539,159 @@ def get_f5_model():
         raise RuntimeError(f"F5-TTS load failed: {_f5_err}") from _f5_err
 
 
+def _get_audio_duration(audio_path: str) -> float:
+    """Return audio duration in seconds without relying on deprecated torchaudio.info."""
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return float(res.stdout.strip())
+    except Exception:
+        pass
+    try:
+        wv, sr = torchaudio.load(audio_path)
+        return float(wv.shape[-1]) / float(sr)
+    except Exception:
+        return 0.0
+
+
+def _prepare_clean_f5_reference(ref_audio: str) -> str:
+    """
+    Ensure reference audio is <= 9.8s cut cleanly on a natural speech pause,
+    keyed by source path+mtime+size so distinct voices never overwrite each other.
+    Eliminates F5-TTS 'Audio is over 12s, clipping short' mid-word cuts.
+    """
+    import hashlib, subprocess
+    if not ref_audio or not os.path.exists(ref_audio):
+        return ref_audio
+
+    dur = _get_audio_duration(ref_audio)
+    if dur <= 10.5 and dur > 0:
+        return ref_audio
+
+    os.makedirs(TTS_OUTPUT_DIR, exist_ok=True)
+    st = os.stat(ref_audio)
+    sig = f"{os.path.abspath(ref_audio)}|{st.st_size}|{int(st.st_mtime)}".encode("utf-8")
+    h = hashlib.sha1(sig).hexdigest()[:12]
+    trimmed_path = os.path.join(TTS_OUTPUT_DIR, f"ref_{h}.wav")
+    if os.path.exists(trimmed_path) and os.path.getsize(trimmed_path) > 1000:
+        return trimmed_path
+
+    start_sec = 0.0
+    end_sec = 9.5
+    try:
+        sd = subprocess.run(
+            ["ffmpeg", "-i", ref_audio, "-af", "silencedetect=noise=-30dB:d=0.25", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=10,
+        )
+        sil_starts, sil_ends = [], []
+        for line in sd.stderr.splitlines():
+            m_s = re.search(r"silence_start:\s*([0-9.]+)", line)
+            m_e = re.search(r"silence_end:\s*([0-9.]+)", line)
+            if m_s:
+                sil_starts.append(float(m_s.group(1)))
+            if m_e:
+                sil_ends.append(float(m_e.group(1)))
+        # Skip initial mic-silence if speech begins early
+        if sil_ends and sil_ends[0] <= 1.2:
+            start_sec = max(0.0, sil_ends[0] - 0.1)
+        # Pick the latest pause whose segment duration stays <= 9.8s (min 4.5s speech)
+        best_end = None
+        for s_start in sil_starts:
+            seg = s_start - start_sec
+            if 4.5 <= seg <= 9.8:
+                best_end = s_start + 0.08
+        if best_end is not None:
+            end_sec = best_end
+        elif dur > 0:
+            end_sec = min(dur, start_sec + 9.5)
+    except Exception:
+        end_sec = min(dur, 9.5) if dur > 0 else 9.5
+
+    clip_dur = max(4.0, min(9.8, end_sec - start_sec))
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", f"{start_sec:.3f}", "-t", f"{clip_dur:.3f}",
+             "-i", ref_audio, "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le", trimmed_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=15,
+        )
+        # Preserve explicit sidecar .txt only if original was NOT trimmed past a mismatch
+        print(f"[TTS F5-TTS] Cleanly trimmed reference {dur:.1f}s -> {clip_dur:.2f}s at pause ({os.path.basename(trimmed_path)}).")
+        return trimmed_path
+    except Exception:
+        try:
+            _wv, _sr = torchaudio.load(ref_audio)
+            _s = int(start_sec * _sr)
+            _e = min(_s + int(clip_dur * _sr), _wv.shape[-1])
+            torchaudio.save(trimmed_path, _wv[:, _s:_e], _sr)
+            return trimmed_path
+        except Exception:
+            return ref_audio
+
+
+def _ensure_f5_ref_transcript(model, ref_audio: str) -> str:
+    """Load or generate & cache sidecar .txt for *ref_audio* so Whisper never re-runs on live calls."""
+    if not ref_audio or not os.path.exists(ref_audio):
+        return ""
+    ref_txt_path = os.path.splitext(ref_audio)[0] + ".txt"
+    if os.path.exists(ref_txt_path):
+        try:
+            with open(ref_txt_path, "r", encoding="utf-8") as f:
+                cached = f.read().strip()
+            if cached:
+                return cached
+        except Exception:
+            pass
+    if model is not None and hasattr(model, "transcribe"):
+        try:
+            txt = (model.transcribe(ref_audio) or "").strip()
+            if txt:
+                with open(ref_txt_path, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                print(f"[TTS F5-TTS] Cached ref transcript to {os.path.basename(ref_txt_path)}: '{txt[:60]}'")
+                return txt
+        except Exception as _te:
+            print(f"[TTS F5-TTS] Ref transcribe cache note: {_te}")
+    return ""
+
+
+def _normalize_for_f5tts(text: str) -> str:
+    """Normalize punctuation, unicode whitespace, and shorthand so F5-TTS annunciates cleanly."""
+    t = text or ""
+    # Replace non-breaking / narrow spaces (e.g. '1\u202fp.m.') and curly punctuation
+    t = t.replace("\u202f", " ").replace("\u00a0", " ").replace("\u200b", "")
+    t = t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+    t = t.replace("—", ", ").replace("–", ", ").replace(";", ",")
+    t = re.sub(r"https?://\S+", "", t)
+    t = re.sub(r"[*_#`~\[\]()]", " ", t)
+    # Expand common spoken time / symbol shorthand that neural TTS stumbles on
+    t = re.sub(r"\b(\d{1,2}):00\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 A M", t)
+    t = re.sub(r"\b(\d{1,2}):00\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 P M", t)
+    t = re.sub(r"\b(\d{1,2})\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 A M", t)
+    t = re.sub(r"\b(\d{1,2})\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 P M", t)
+    t = t.replace("%", " percent").replace("&", " and ")
+    t = t.replace("!", ".")
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t or "Hello."
+
+
 def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
     """High-accuracy Flow Matching voice cloning using F5-TTS."""
     global f5_model
     model = get_f5_model()
-    ref_audio = _resolve_reference_audio(reference_audio)
-
-    # Clean text: remove markdown symbols, brackets, URLs
-    clean_text = re.sub(r'[*_#`~\[\]()]', ' ', text)
-    clean_text = re.sub(r'https?://\S+', '', clean_text)
-    clean_text = clean_text.replace('!', '.').replace('—', ', ').replace('–', ', ').strip()
-    if not clean_text:
-        clean_text = text.strip() or "Hello"
-
-    ref_txt_path = os.path.splitext(ref_audio)[0] + ".txt"
-    ref_text = ""
-    if os.path.exists(ref_txt_path):
-        try:
-            with open(ref_txt_path, "r") as f:
-                ref_text = f.read().strip()
-        except Exception:
-            pass
+    ref_audio = _prepare_clean_f5_reference(_resolve_reference_audio(reference_audio))
+    clean_text = _normalize_for_f5tts(text)
+    ref_text = _ensure_f5_ref_transcript(model, ref_audio)
 
     os.makedirs(TTS_OUTPUT_DIR, exist_ok=True)
     timestamp = int(time.time() * 1000)
     output_path = os.path.join(TTS_OUTPUT_DIR, f"output_{timestamp}.wav")
 
-    nfe_steps = int(os.getenv("F5_NFE_STEP", "12") or "12")
+    nfe_steps = int(os.getenv("F5_NFE_STEP", "16") or "16")
     t0 = time.time()
     wav, sr, _ = model.infer(
         ref_file=ref_audio,
@@ -538,7 +699,7 @@ def _synthesize_f5tts(text: str, reference_audio: str = None) -> str:
         gen_text=clean_text,
         file_wave=output_path,
         nfe_step=nfe_steps,
-        cfg_strength=1.5,
+        cfg_strength=2.0,
         speed=1.0,
     )
     gen_duration = time.time() - t0
@@ -779,6 +940,14 @@ def prewarm_engine(greeting_text: str = None, engine: str = None, reference_audi
     if wav_path and os.path.exists(wav_path):
         shutil.copy2(wav_path, prewarmed_path)
         print(f"[TTS Pre-Warm] ⚡ Pre-warmed greeting ({active_engine}) generated in {total_time:.2f}s! Ready at: {prewarmed_path}")
+        # Save the greeting text alongside the WAV so twilio_voice_webhook can use the exact same text
+        # in the call transcript, keeping chat display and actual audio in sync.
+        try:
+            greeting_txt_path = os.path.join(TTS_OUTPUT_DIR, "prewarmed_greeting.txt")
+            with open(greeting_txt_path, "w", encoding="utf-8") as _gtf:
+                _gtf.write(greeting_text)
+        except Exception as _gtw_err:
+            print(f"[TTS Pre-Warm] greeting text save note: {_gtw_err}")
 
     # Also pre-generate reprompt and goodbye
     reprompt_file = os.path.join(TTS_OUTPUT_DIR, "prewarmed_reprompt.wav")

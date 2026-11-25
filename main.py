@@ -50,8 +50,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-import os, shutil, json, re, time
+import os, shutil, json, re, time, uuid
 from datetime import datetime
+
+SERVER_BOOT_ID = uuid.uuid4().hex[:12]
 
 from backend.database import get_db, init_db
 from backend import models
@@ -86,6 +88,12 @@ async def startup():
         _rag.prewarm_embedder()
     except Exception as _rpe:
         print(f"[Startup] RAG prewarm note: {_rpe}")
+    # Pre-load TTS model in background so first call doesn't cold-start (F5-TTS takes ~15s to load)
+    try:
+        from backend import tts_engine as _tts
+        _tts.prewarm_model()
+    except Exception as _tpe:
+        print(f"[Startup] TTS model prewarm note: {_tpe}")
     # Seed default voices and sample script if the database is empty
     try:
         with next(get_db()) as _sdb:
@@ -562,42 +570,30 @@ def _get_voice_persona_name(voice_obj=None, engine: Optional[str] = None) -> str
 
 def _build_greeting_text(persona_name: str = "Alex", contact_name: str = "there", language: str = "en-US", mode: str = "outbound") -> str:
     """Build synchronized greeting text used identically in chat UI, pre-warm audio, and Twilio calls."""
-    persona = (persona_name or "Alex").strip() or "Alex"
-    cname = (contact_name or "").strip() or "there"
-    lang = (language or "en-US").strip()
-    m = (mode or "outbound").strip().lower()
+    from backend import twilio_service
+    return twilio_service.build_greeting_text(
+        persona_name=persona_name,
+        contact_name=contact_name,
+        language=language,
+        mode=mode,
+    )
 
-    if lang in ("kn-IN", "kn"):
-        kn_name = cname if cname != "there" else "ಸ್ನೇಹಿತರೆ"
-        if m == "inbound":
-            return (
-                f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ, ನಾನು {persona}. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?"
-                if cname != "there"
-                else f"ನಮಸ್ಕಾರ, ವೋಕಲಿಕ್ಸ್‌ಗೆ ಸ್ವಾಗತ! ನನ್ನ ಹೆಸರು {persona}. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಲ್ಲೆನು?"
-            )
-        if m == "marketing":
-            return f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ {persona} ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಒಂದು ನಿಮಿಷ ಸಮಯವಿದೆಯೇ?"
-        return f"ನಮಸ್ಕಾರ {kn_name}! ವೋಕಲಿಕ್ಸ್‌ನಿಂದ {persona} ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ. ಹೇಗಿದ್ದೀರಾ?"
 
-    if lang in ("hi-IN", "hi"):
-        hi_name = cname if cname != "there" else "जी"
-        if m == "inbound":
-            return (
-                f"नमस्ते {hi_name}! वोकलिक्स में आपका स्वागत है, मैं {persona} बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?"
-                if cname != "there"
-                else f"नमस्ते, वोकलिक्स में आपका स्वागत है! मेरा नाम {persona} है। मैं आपकी क्या मदद कर सकता हूँ?"
-            )
-        if m == "marketing":
-            return f"नमस्ते {hi_name}! वोकलिक्स से {persona} बोल रहा हूँ। क्या आपके पास एक मिनट का समय है?"
-        return f"नमस्ते {hi_name}! वोकलिक्स से {persona} बोल रहा हूँ। आप कैसे हैं?"
-
-    if m == "inbound":
-        if cname != "there":
-            return f"Hello {cname}! Thank you for calling Vocalyx, this is {persona}. How can I help you today?"
-        return f"Hello, thank you for calling Vocalyx! My name is {persona}. How may I assist you today?"
-    if m == "marketing":
-        return f"Hi {cname}! This is {persona} calling from Vocalyx with an exciting update for you. Do you have a quick minute?"
-    return f"Hello {cname}! This is {persona} calling from Vocalyx. How are you doing today?"
+def _compose_script_and_context(db: Session, script_id_val, raw_call_context: Optional[str]) -> Optional[str]:
+    """Compose canonical script + caller context string used identically across prewarm, dial, and webhooks."""
+    parts = []
+    if script_id_val:
+        try:
+            s_obj = db.query(models.Script).filter(models.Script.id == int(script_id_val)).first()
+            if s_obj and s_obj.content:
+                parts.append(f"[Call Script: {s_obj.title}]\n{s_obj.content.strip()}")
+        except Exception:
+            pass
+    ctx_clean = (raw_call_context or "").strip()
+    if ctx_clean:
+        if not parts or ctx_clean not in parts[0]:
+            parts.append(f"[Caller Status & Live Context]\n{ctx_clean}")
+    return "\n\n".join(parts) if parts else None
 
 
 def _sync_active_voice_audio(audio_path: Optional[str]):
@@ -607,7 +603,15 @@ def _sync_active_voice_audio(audio_path: Optional[str]):
         config.REFERENCE_AUDIO_PATH = audio_path
     tts_engine._cached_lux_prompt = None
     tts_engine._cached_chatterbox_ref = None
-    for cf in ["voice_clone_lux_conds.pt", "voice_clone_conds.pt", "prewarmed_greeting.wav", "prewarmed_reprompt.wav", "prewarmed_goodbye.wav"]:
+    for cf in [
+        "voice_clone_lux_conds.pt",
+        "voice_clone_conds.pt",
+        "prewarmed_greeting.wav",
+        "prewarmed_greeting.txt",
+        "prewarmed_greeting.meta.json",
+        "prewarmed_reprompt.wav",
+        "prewarmed_goodbye.wav",
+    ]:
         fp = os.path.join(TTS_OUTPUT_DIR, cf)
         if os.path.exists(fp):
             try:
@@ -626,6 +630,7 @@ def get_tts_prewarm_status(db: Session = Depends(get_db)):
     active_v = db.query(models.Voice).filter(models.Voice.is_active == True).first()
     return {
         "ready": is_ready,
+        "boot_id": SERVER_BOOT_ID,
         "greeting_url": (active_v.preview_url if active_v and active_v.preview_url else "/tts_output/prewarmed_greeting.wav") if is_ready else None,
         "model_loaded": any(
             getattr(tts_engine, attr, None) is not None
@@ -713,26 +718,16 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
         selected_voice if req_lang not in ("kn-IN", "kn", "hi-IN", "hi") else None,
         active_engine,
     )
-    prewarm_ctx_parts = []
-    if req_script_id:
-        try:
-            s_obj = db.query(models.Script).filter(models.Script.id == int(req_script_id)).first()
-            if s_obj and s_obj.content:
-                prewarm_ctx_parts.append(s_obj.content.strip())
-        except Exception:
-            pass
-    if req_call_context:
-        if not prewarm_ctx_parts or req_call_context not in prewarm_ctx_parts[0]:
-            prewarm_ctx_parts.append(req_call_context)
+    combined_ctx = _compose_script_and_context(db, req_script_id, req_call_context)
 
     custom_greeting = None
-    if prewarm_ctx_parts:
+    if combined_ctx:
         try:
             from backend import llm_engine
             custom_greeting = llm_engine.generate_context_greeting(
                 persona_name=persona_name,
                 contact_name=contact_name,
-                script_content="\n\n".join(prewarm_ctx_parts),
+                script_content=combined_ctx,
                 language=req_lang,
                 mode=req_mode,
             )
@@ -747,6 +742,7 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
     )
 
     try:
+        from backend import twilio_service
         ref_audio = None
         if selected_voice and selected_voice.voice_type == "cloned" and selected_voice.audio_path and os.path.exists(selected_voice.audio_path):
             ref_audio = selected_voice.audio_path
@@ -754,6 +750,28 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
         config.TWILIO_VOICE_ENGINE = active_engine
 
         wav_path = tts_engine.prewarm_engine(greeting_text, engine=active_engine, reference_audio=ref_audio)
+        prewarm_sig = twilio_service.compute_greeting_signature(
+            voice_engine=active_engine,
+            voice_id=selected_voice.id if selected_voice else None,
+            language=req_lang,
+            contact_id=req_contact_id,
+            mode=req_mode,
+            script_id=req_script_id,
+            custom_context=combined_ctx,
+            persona_name=persona_name,
+        )
+        twilio_service.save_prewarm_meta({
+            "signature": prewarm_sig,
+            "text": greeting_text,
+            "boot_id": SERVER_BOOT_ID,
+            "engine": active_engine,
+            "voice_id": selected_voice.id if selected_voice else None,
+            "language": req_lang,
+            "contact_id": str(req_contact_id or ""),
+            "mode": req_mode,
+            "script_id": str(req_script_id or ""),
+            "persona_name": persona_name,
+        })
         elapsed = time.time() - t0
         print(
             f"[TTS Pre-Warm Complete] engine={active_engine} persona={persona_name} "
@@ -763,6 +781,7 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
         return {
             "success": True,
             "ready": True,
+            "boot_id": SERVER_BOOT_ID,
             "greeting_url": "/tts_output/prewarmed_greeting.wav",
             "greeting_text": greeting_text,
             "voice_id": selected_voice.id if selected_voice else None,
@@ -1604,19 +1623,7 @@ def initiate_phone_call(call_req: TwilioCallRequest, request: Request, db: Sessi
         eff_engine,
     )
 
-    combined_ctx_parts = []
-    if call_req.script_id:
-        try:
-            s_obj = db.query(models.Script).filter(models.Script.id == int(call_req.script_id)).first()
-            if s_obj and s_obj.content:
-                combined_ctx_parts.append(f"[Call Script: {s_obj.title}]\n{s_obj.content.strip()}")
-        except Exception:
-            pass
-    if call_req.call_context and call_req.call_context.strip():
-        ctx_clean = call_req.call_context.strip()
-        if not combined_ctx_parts or ctx_clean not in combined_ctx_parts[0]:
-            combined_ctx_parts.append(f"[Caller Status & Live Context]\n{ctx_clean}")
-    combined_call_context = "\n\n".join(combined_ctx_parts) if combined_ctx_parts else None
+    combined_call_context = _compose_script_and_context(db, call_req.script_id, call_req.call_context)
 
     try:
         res = twilio_service.make_outbound_call(
@@ -1804,10 +1811,23 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
             except Exception:
                 pass
 
-        # Synchronized initial greeting — use context-aware LLM greeting if a script/context is set,
-        # otherwise fall back to the localized template (which matches the pre-warmed audio exactly).
-        greeting = None
-        if call_custom_ctx:
+        # Use exact locked greeting from make_outbound_call when present so phone audio == chat transcript.
+        greeting = (existing_call.get("greeting_text") or "").strip() or None
+        if not greeting:
+            target_sig = twilio_service.compute_greeting_signature(
+                voice_engine=call_engine,
+                voice_id=existing_call.get("voice_id") or (active_voice_db.id if active_voice_db else None),
+                language=call_lang,
+                contact_id=cid,
+                mode=mode,
+                script_id=script_id_param,
+                custom_context=call_custom_ctx,
+                persona_name=persona_name,
+            )
+            prewarm_meta = twilio_service.get_prewarm_meta()
+            if prewarm_meta.get("signature") == target_sig and prewarm_meta.get("text"):
+                greeting = prewarm_meta["text"].strip()
+        if not greeting and call_custom_ctx:
             try:
                 from backend import llm_engine as _llm
                 greeting = _llm.generate_context_greeting(
@@ -2067,7 +2087,7 @@ async def twilio_respond_webhook(request: Request):
                 (call_engine or "").lower() in ("f5tts", "f5-tts", "f5")
                 and getattr(tts_mod, "f5_model", None) is None
             )
-            deadline = t_req_start + (1.5 if model_cold else 8.5)
+            deadline = t_req_start + (1.2 if model_cold else 5.5)
             while not synth_future.done() and time.monotonic() < deadline:
                 await asyncio.sleep(0.08)
 
@@ -2105,82 +2125,94 @@ async def twilio_respond_webhook(request: Request):
 async def twilio_continue_webhook(request: Request):
     """
     Called by Twilio <Redirect> when TTS synthesis extends past the initial webhook budget.
-    Waits cleanly within Twilio's HTTP limit, redirects once more if needed, then delivers audio.
+    Responds strictly within ~2.5s per hop so HTTP requests never hit Twilio's 15s timeout even under GIL load.
     """
     import asyncio
+    t_cont_start = time.monotonic()
     from backend import twilio_service, config
     base_url = get_request_base_url(request)
+    call_sid = "call_unknown"
 
-    form_data = {}
-    if request.method == "POST":
-        try:
-            form_data = await request.form()
-        except Exception:
-            pass
-    call_sid = form_data.get("CallSid") or request.query_params.get("call_sid") or request.query_params.get("CallSid") or "call_unknown"
-    turn_id = request.query_params.get("turn") or ""
     try:
-        hop = int(request.query_params.get("hop", "1") or "1")
-    except ValueError:
-        hop = 1
-
-    call_state = twilio_service.active_calls.get(call_sid, {})
-    synth_key = f"{call_sid}:{turn_id}" if turn_id else call_sid
-    pending_future = twilio_service.pending_synth_futures.get(synth_key) if turn_id else None
-
-    # Wait up to 7.0s per hop so almost any slow batch finishes in hop=1 well within Twilio's 15s timeout
-    wav_path = None
-    for _ in range(35):
-        wav_path = twilio_service.pregenerated_audio.pop(synth_key, None)
-        if not wav_path and not turn_id:
-            wav_path = twilio_service.pregenerated_audio.pop(call_sid, None)
-        if wav_path and os.path.exists(wav_path):
-            twilio_service.pending_synth_futures.pop(synth_key, None)
-            break
-        wav_path = None
-        if pending_future is not None and pending_future.done():
-            twilio_service.pending_synth_futures.pop(synth_key, None)
+        form_data = {}
+        if request.method == "POST":
             try:
-                cand = pending_future.result()
-                if cand and os.path.exists(cand):
-                    wav_path = cand
-            except Exception as cont_err:
-                print(f"[Twilio Continue] Synthesis future error: {cont_err}")
-            break
-        await asyncio.sleep(0.2)
+                form_data = await request.form()
+            except Exception:
+                pass
+        call_sid = form_data.get("CallSid") or request.query_params.get("call_sid") or request.query_params.get("CallSid") or "call_unknown"
+        turn_id = request.query_params.get("turn") or ""
+        try:
+            hop = int(request.query_params.get("hop", "1") or "1")
+        except ValueError:
+            hop = 1
 
-    print(
-        f"[Twilio Continue] Call {call_sid} turn={turn_id} hop={hop} "
-        f"wav_ready={bool(wav_path)} future_done={pending_future.done() if pending_future else 'none'}"
-    )
+        call_state = twilio_service.active_calls.get(call_sid, {})
+        synth_key = f"{call_sid}:{turn_id}" if turn_id else call_sid
+        pending_future = twilio_service.pending_synth_futures.get(synth_key) if turn_id else None
 
-    if (not wav_path or not os.path.exists(wav_path)) and hop < 4 and pending_future is not None and not pending_future.done():
-        public_url = twilio_service.resolve_base_url(base_url)
-        handoff_xml = _build_continue_twiml(public_url, call_sid, turn_id, hop=hop + 1, pause_len=3)
-        return Response(content=handoff_xml, media_type="application/xml")
+        # Short wall-clock poll (max 2.5s) guarantees fast HTTP 200 back to Twilio well under 15s
+        wav_path = None
+        cont_deadline = t_cont_start + 2.5
+        while time.monotonic() < cont_deadline:
+            wav_path = twilio_service.pregenerated_audio.pop(synth_key, None)
+            if not wav_path and not turn_id:
+                wav_path = twilio_service.pregenerated_audio.pop(call_sid, None)
+            if wav_path and os.path.exists(wav_path):
+                twilio_service.pending_synth_futures.pop(synth_key, None)
+                break
+            wav_path = None
+            if pending_future is not None and pending_future.done():
+                twilio_service.pending_synth_futures.pop(synth_key, None)
+                try:
+                    cand = pending_future.result()
+                    if cand and os.path.exists(cand):
+                        wav_path = cand
+                except Exception as cont_err:
+                    print(f"[Twilio Continue] Synthesis future error: {cont_err}")
+                break
+            await asyncio.sleep(0.12)
 
-    if turn_id:
-        twilio_service.pending_synth_futures.pop(synth_key, None)
+        print(
+            f"[Twilio Continue] Call {call_sid} turn={turn_id} hop={hop} "
+            f"wav_ready={bool(wav_path)} future_done={pending_future.done() if pending_future else 'none'} "
+            f"elapsed={time.monotonic() - t_cont_start:.2f}s"
+        )
 
-    transcript = call_state.get("transcript", [])
-    last_reply = "I am listening, please go ahead."
-    for msg in reversed(transcript):
-        if msg.get("role") == "agent":
-            last_reply = msg.get("text", "")
-            break
+        if (not wav_path or not os.path.exists(wav_path)) and hop < 10 and pending_future is not None and not pending_future.done():
+            public_url = twilio_service.resolve_base_url(base_url)
+            handoff_xml = _build_continue_twiml(public_url, call_sid, turn_id, hop=hop + 1, pause_len=3)
+            return Response(content=handoff_xml, media_type="application/xml")
 
-    # If background synthesis did not complete or failed, fall back cleanly to prewarmed_reprompt.wav
-    if not wav_path or not os.path.exists(wav_path):
-        for candidate_name in ["prewarmed_reprompt.wav", "prewarmed_filler.wav"]:
-            cand_path = os.path.join(config.TTS_OUTPUT_DIR, candidate_name)
-            if os.path.exists(cand_path):
-                wav_path = cand_path
+        if turn_id:
+            twilio_service.pending_synth_futures.pop(synth_key, None)
+
+        transcript = call_state.get("transcript", [])
+        last_reply = "I am listening, please go ahead."
+        for msg in reversed(transcript):
+            if msg.get("role") == "agent":
+                last_reply = msg.get("text", "")
                 break
 
-    call_engine = call_state.get("voice_engine") or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")
-    call_ref = call_state.get("reference_audio")
-    twiml_xml = twilio_service.build_twiml(last_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False, voice_engine=call_engine, reference_audio=call_ref)
-    return Response(content=twiml_xml, media_type="application/xml")
+        if not wav_path or not os.path.exists(wav_path):
+            for candidate_name in ["prewarmed_reprompt.wav", "prewarmed_filler.wav"]:
+                cand_path = os.path.join(config.TTS_OUTPUT_DIR, candidate_name)
+                if os.path.exists(cand_path):
+                    wav_path = cand_path
+                    break
+
+        call_engine = call_state.get("voice_engine") or getattr(config, "TWILIO_VOICE_ENGINE", "f5tts")
+        call_ref = call_state.get("reference_audio")
+        twiml_xml = twilio_service.build_twiml(last_reply, call_sid, base_url, wav_path=wav_path, is_greeting=False, voice_engine=call_engine, reference_audio=call_ref)
+        return Response(content=twiml_xml, media_type="application/xml")
+    except Exception as exc:
+        print(f"[Twilio Continue Fallback]: {exc}")
+        from twilio.twiml.voice_response import VoiceResponse, Gather
+        public_url = twilio_service.resolve_base_url(base_url)
+        vr = VoiceResponse()
+        vr.play(f"{public_url}/tts_output/prewarmed_reprompt.wav")
+        vr.append(Gather(input="speech", action=f"{public_url}/api/twilio/respond?call_sid={call_sid}", method="POST", speech_timeout="auto", timeout=10, action_on_empty_result=True))
+        return Response(content=str(vr), media_type="application/xml")
 
 
 
