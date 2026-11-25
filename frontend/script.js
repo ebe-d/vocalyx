@@ -78,6 +78,8 @@ const api = {
     if (opts.contact_id) payload.contact_id = parseInt(opts.contact_id, 10);
     if (opts.contact_name) payload.contact_name = opts.contact_name;
     if (opts.mode) payload.mode = opts.mode;
+    if (opts.script_id) payload.script_id = parseInt(opts.script_id, 10);
+    if (opts.call_context) payload.call_context = opts.call_context;
     return api._fetch('POST', '/api/tts/prewarm', payload, false, 120000);
   },
   getVoices:      ()     => api.get('/api/voices'),
@@ -469,9 +471,13 @@ const ui = {
     document.getElementById('breadcrumb').textContent = labels[name] || name;
 
     const loaders = {
-      dashboard: ui.loadDashboard,
+      dashboard: () => {
+        ui.loadDashboard();
+        ui.loadScripts();
+      },
       'phone-call': () => {
         ui.loadSimulatorContacts();
+        ui.loadScripts();
         twilioManager.loadConfig();
         voicePrewarmManager.checkStatus();
       },
@@ -557,14 +563,22 @@ const ui = {
   /* ── Simulator & Phone Contacts ──────────────────────────────── */
   async loadSimulatorContacts() {
     try {
-      const contacts = await api.getContacts();
+      const [contacts, calls] = await Promise.all([
+        api.getContacts(),
+        (state.calls && state.calls.length) ? Promise.resolve(state.calls) : api.getCalls().catch(() => []),
+      ]);
       state.contacts = contacts || [];
+      if (calls && calls.length) state.calls = calls;
       const selIds = ['contact-select', 'contact-select-mkt', 'phone-contact-select'];
       selIds.forEach(id => {
         const sel = document.getElementById(id);
         if (!sel) return;
+        const prev = sel.value;
         sel.innerHTML = `<option value="">— Choose a contact —</option>` +
-          contacts.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${escapeHtml(c.phone_number || '')}</option>`).join('');
+          state.contacts.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${escapeHtml(c.phone_number || '')}</option>`).join('');
+        if (prev && state.contacts.some(c => String(c.id) === String(prev))) {
+          sel.value = prev;
+        }
       });
     } catch (e) {
       toast.error(`Could not load contacts: ${e.message}`);
@@ -790,14 +804,43 @@ const ui = {
   },
 
   _populateScriptSelectors() {
-    const sel = document.getElementById('sim-script-select');
-    if (!sel) return;
-    const currentVal = sel.value;
-    sel.innerHTML = `<option value="">— No script (free-form conversation) —</option>` +
+    const optsHtml = `<option value="">— No script (free-form / custom context) —</option>` +
       (state.scripts || []).map(s => `<option value="${s.id}">${escapeHtml(s.title)}</option>`).join('');
-    if (currentVal && state.scripts.some(s => s.id == currentVal)) {
-      sel.value = currentVal;
+
+    ['sim-script-select', 'phone-script-select'].forEach(selId => {
+      const sel = document.getElementById(selId);
+      if (!sel) return;
+      const currentVal = sel.value;
+      sel.innerHTML = optsHtml;
+      if (currentVal && (state.scripts || []).some(s => String(s.id) === String(currentVal))) {
+        sel.value = currentVal;
+      }
+    });
+  },
+
+  buildContactContextText(contactId) {
+    if (!contactId) return '';
+    const c = (state.contacts || []).find(x => String(x.id) === String(contactId));
+    if (!c) return '';
+
+    const lines = [];
+    if (c.interest_level && c.interest_level !== 'Unknown') {
+      lines.push(`Caller Status / Interest: ${c.interest_level}`);
     }
+    if (c.last_topic) lines.push(`Previous Position / Topic: ${c.last_topic}`);
+
+    const contactCalls = (state.calls || [])
+      .filter(call => String(call.contact_id) === String(c.id))
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    if (contactCalls.length > 0) {
+      const last = contactCalls[0];
+      const outcomeStr = last.outcome ? ` (${last.outcome})` : '';
+      if (last.summary) lines.push(`Last Call Summary${outcomeStr}: ${last.summary}`);
+    }
+    if (c.concerns) lines.push(`Known Concerns: ${c.concerns}`);
+    if (c.commitments) lines.push(`Previous Commitments: ${c.commitments}`);
+    if (c.notes) lines.push(`Notes: ${c.notes}`);
+    return lines.join('\n');
   },
 
   /* ── History ────────────────────────────────────────────────── */
@@ -1121,6 +1164,7 @@ const simulator = {
       const activeVoiceId = simSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
       const simScriptSel = document.getElementById('sim-script-select');
       const activeScriptId = simScriptSel?.value ? parseInt(simScriptSel.value) : null;
+      const simContextText = document.getElementById('sim-call-context')?.value?.trim() || null;
       const simLang = state.selectedLanguage || document.getElementById('sim-language')?.value || 'en-US';
 
       const res = await api.chat({
@@ -1130,6 +1174,7 @@ const simulator = {
         voice_id: activeVoiceId ? parseInt(activeVoiceId) : null,
         conversation_history: state.transcript,
         script_id: activeScriptId,
+        call_context: simContextText,
         language: simLang,
       });
 
@@ -2405,6 +2450,8 @@ const twilioManager = {
     const voiceEngine = phoneSel?.value || document.getElementById('twilio-voice-select')?.value || 'f5tts';
     const voiceId = phoneSel?.selectedOptions?.[0]?.dataset?.voiceId || null;
     const callLang = document.getElementById('phone-call-language')?.value || state.selectedLanguage || 'en-US';
+    const phoneScriptVal = document.getElementById('phone-script-select')?.value || '';
+    const phoneContextVal = document.getElementById('phone-call-context')?.value?.trim() || '';
 
     if (typeof voicePrewarmManager !== 'undefined' && !voicePrewarmManager.isWarmedForCurrent()) {
       voicePrewarmManager.invalidate();
@@ -2423,6 +2470,8 @@ const twilioManager = {
         voice_engine: voiceEngine,
         voice_id: voiceId ? parseInt(voiceId) : null,
         language: callLang,
+        script_id: phoneScriptVal ? parseInt(phoneScriptVal, 10) : null,
+        call_context: phoneContextVal || null,
       });
 
       if (res && res.call_sid) {
@@ -2491,7 +2540,7 @@ const twilioManager = {
             if (phoneLog) {
               phoneLog.innerHTML = call.transcript.map(m => `
                 <div class="conv-bubble ${m.role === 'user' ? 'user' : 'agent'}" style="margin-bottom:8px;">
-                  <div class="conv-bubble-role">${m.role === 'user' ? '📞 Caller' : '👤 Alex (Cloned Voice)'}</div>
+                  <div class="conv-bubble-role">${m.role === 'user' ? '📞 Caller' : `👤 ${escapeHtml(call.persona_name || voicePrewarmManager.getPersonaName())}`}</div>
                   <div class="conv-bubble-text">${escapeHtml(m.text)}</div>
                 </div>
               `).join('');
@@ -3001,6 +3050,8 @@ const voicePrewarmManager = {
         contact_id: ctx.contactId || null,
         contact_name: ctx.contactName || null,
         mode: 'outbound',
+        script_id: document.getElementById('phone-script-select')?.value || null,
+        call_context: document.getElementById('phone-call-context')?.value?.trim() || null,
       });
       if (res && res.ready) {
         this.isReady = true;
@@ -3212,6 +3263,8 @@ const simPrewarm = {
         contact_id: ctx.contactId && !isNaN(Number(ctx.contactId)) ? ctx.contactId : null,
         contact_name: ctx.contactName || null,
         mode: ctx.mode || 'outbound',
+        script_id: document.getElementById('sim-script-select')?.value || null,
+        call_context: document.getElementById('sim-call-context')?.value?.trim() || null,
       });
       if (res && res.ready) {
         this.isReady = true;
@@ -3553,6 +3606,20 @@ function bindEvents() {
     syncTelephonyEngine(e.target.value);
   });
 
+  const applyScriptIntoTextarea = (textareaEl, scriptId) => {
+    if (!textareaEl) return;
+    let cur = textareaEl.value || '';
+    cur = cur.replace(/\n*\[Call Script:[\s\S]*$/m, '').trim();
+    if (!scriptId) {
+      textareaEl.value = cur;
+      return;
+    }
+    const s = (state.scripts || []).find(x => String(x.id) === String(scriptId));
+    if (!s) return;
+    const block = `[Call Script: ${s.title}]\n${(s.content || '').trim()}`;
+    textareaEl.value = cur ? `${cur}\n\n${block}` : block;
+  };
+
   document.getElementById('phone-contact-select')?.addEventListener('change', (e) => {
     const cid = e.target.value;
     const c = state.contacts.find(x => String(x.id) === String(cid));
@@ -3560,8 +3627,83 @@ function bindEvents() {
     if (c && phoneInp) {
       phoneInp.value = c.phone_number || '';
     }
+    const ctxBox = document.getElementById('phone-call-context');
+    if (ctxBox) {
+      const statusText = cid ? ui.buildContactContextText(cid) : '';
+      const scriptId = document.getElementById('phone-script-select')?.value || '';
+      ctxBox.value = statusText;
+      if (scriptId) applyScriptIntoTextarea(ctxBox, scriptId);
+    }
     if (typeof voicePrewarmManager !== 'undefined') {
       voicePrewarmManager.invalidate('Contact changed — click Re-Warm before dialing.');
+    }
+  });
+
+  document.getElementById('phone-script-select')?.addEventListener('change', (e) => {
+    const sid = e.target.value;
+    const ctxBox = document.getElementById('phone-call-context');
+    applyScriptIntoTextarea(ctxBox, sid);
+    const badge = document.getElementById('phone-ctx-badge');
+    if (badge) {
+      badge.className = sid ? 'badge badge-lime' : 'badge badge-grey';
+      badge.textContent = sid ? 'Script + Context' : 'Editable';
+    }
+    if (sid) toast.info('Loaded script into Call Context — edit anything before dialing.');
+  });
+
+  document.getElementById('btn-phone-ctx-reset')?.addEventListener('click', () => {
+    const cid = document.getElementById('phone-contact-select')?.value || '';
+    const ctxBox = document.getElementById('phone-call-context');
+    if (!cid) {
+      toast.info('Select a contact first to load their saved status.');
+      return;
+    }
+    if (ctxBox) {
+      ctxBox.value = ui.buildContactContextText(cid) || 'No previous status recorded yet.';
+      const sid = document.getElementById('phone-script-select')?.value || '';
+      if (sid) applyScriptIntoTextarea(ctxBox, sid);
+      toast.success('Loaded latest contact status & call history.');
+    }
+  });
+
+  document.getElementById('btn-phone-ctx-clear')?.addEventListener('click', () => {
+    const ctxBox = document.getElementById('phone-call-context');
+    const scSel = document.getElementById('phone-script-select');
+    const badge = document.getElementById('phone-ctx-badge');
+    if (ctxBox) ctxBox.value = '';
+    if (scSel) scSel.value = '';
+    if (badge) { badge.className = 'badge badge-grey'; badge.textContent = 'Editable'; }
+  });
+
+  document.getElementById('btn-phone-ctx-save')?.addEventListener('click', async () => {
+    const cid = document.getElementById('phone-contact-select')?.value || '';
+    const txt = document.getElementById('phone-call-context')?.value?.trim() || '';
+    if (!cid) {
+      toast.info('Select a contact first to save notes.');
+      return;
+    }
+    const cleanNotes = txt.replace(/\n*\[Call Script:[\s\S]*$/m, '').trim();
+    try {
+      const updated = await api.updateContact(cid, { notes: cleanNotes });
+      const idx = (state.contacts || []).findIndex(x => String(x.id) === String(cid));
+      if (idx >= 0 && updated) state.contacts[idx] = updated;
+      toast.success('Updated contact status notes!');
+    } catch (err) {
+      toast.error(`Save notes failed: ${err.message}`);
+    }
+  });
+
+  document.getElementById('sim-script-select')?.addEventListener('change', (e) => {
+    const sid = e.target.value;
+    const simCtx = document.getElementById('sim-call-context');
+    applyScriptIntoTextarea(simCtx, sid);
+    const badge = document.getElementById('sim-script-badge');
+    if (badge) {
+      badge.className = sid ? 'badge badge-lime' : 'badge badge-grey';
+      badge.textContent = sid ? 'Script Active' : 'Optional';
+    }
+    if (sid) {
+      toast.info('Script loaded into Simulator Context — AI will follow these instructions.');
     }
   });
 
@@ -3623,6 +3765,13 @@ function bindEvents() {
         if (simSel && typeof languageEngineSync !== 'undefined') {
           languageEngineSync.syncFromLanguage(contact.preferred_language, simSel);
         }
+      }
+      const simCtx = document.getElementById('sim-call-context');
+      if (simCtx) {
+        const sid = document.getElementById('sim-script-select')?.value || '';
+        const statusTxt = ui.buildContactContextText(cid);
+        simCtx.value = statusTxt;
+        if (sid) applyScriptIntoTextarea(simCtx, sid);
       }
     }
     if (typeof simPrewarm !== 'undefined') {

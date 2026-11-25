@@ -286,6 +286,29 @@
               </div>
             </div>
 
+            <!-- Real Phone Call Context / Previous Status & Script -->
+            <div class="form-group" style="margin-bottom: 14px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:6px; flex-wrap:wrap;">
+                <label for="phone-call-context" style="margin:0; font-size:0.8rem; font-weight:700;">Call Context &amp; Caller Status</label>
+                <span class="badge badge-grey" id="phone-ctx-badge" style="font-size:0.65rem;">Editable</span>
+              </div>
+              <select id="phone-script-select" class="form-select" style="font-size:0.8rem; width:100%; margin-bottom:8px;">
+                <option value="">— Load saved script (optional) —</option>
+              </select>
+              <textarea id="phone-call-context" class="form-input" rows="4" style="font-size:0.78rem; line-height:1.4; resize:vertical; font-family:inherit;" placeholder="Auto-fills caller's previous position/status, last call summary, notes, and commitments. Add, edit, or delete anything — the live call will follow it!"></textarea>
+              <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-outline btn-sm" id="btn-phone-ctx-reset" style="font-size:0.7rem; padding:4px 8px;" title="Reload latest contact status and last call">
+                  ↺ Contact Status
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" id="btn-phone-ctx-save" style="font-size:0.7rem; padding:4px 8px;" title="Save context back to contact notes">
+                  Save Notes
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" id="btn-phone-ctx-clear" style="font-size:0.7rem; padding:4px 8px; margin-left:auto;" title="Clear context box">
+                  Clear
+                </button>
+              </div>
+            </div>
+
             <button class="btn btn-lime btn-lg" id="btn-dial-twilio" disabled title="Click Re-Warm Voice first before dialing" style="width:100%; margin-bottom: 16px; justify-content:center;">
               <i data-lucide="phone-outgoing"></i> Call Real Phone
             </button>
@@ -554,17 +577,18 @@
                 </div>
               </div>
 
-              <!-- Call Script Selection for Simulator -->
+              <!-- Call Script & Context Selection for Simulator -->
               <div class="form-group" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border);">
                 <label for="sim-script-select" style="display:flex; justify-content:space-between; align-items:center; font-size: 0.8rem; font-weight: 700; margin-bottom: 6px;">
-                  <span>Active Call Script</span>
-                  <span class="badge" id="sim-script-badge" style="font-size:0.65rem; background:var(--bg-tertiary); color:var(--text-muted);">Optional</span>
+                  <span>Active Script &amp; Context</span>
+                  <span class="badge badge-grey" id="sim-script-badge" style="font-size:0.65rem;">Optional</span>
                 </label>
-                <select id="sim-script-select" class="form-select" style="font-size: 0.85rem; width: 100%;">
+                <select id="sim-script-select" class="form-select" style="font-size: 0.85rem; width: 100%; margin-bottom: 8px;">
                   <option value="">— No script (free-form conversation) —</option>
                 </select>
+                <textarea id="sim-call-context" class="form-input" rows="3" style="font-size:0.76rem; line-height:1.35; resize:vertical; font-family:inherit;" placeholder="Shows active script / caller status here. Edit, add, or remove instructions anytime during the call."></textarea>
                 <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">
-                  Guides Alex to follow your structured pitch, questions, and close.
+                  Guides the AI representative step-by-step during simulated calls.
                 </div>
               </div>
             </div>

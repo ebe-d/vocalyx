@@ -168,7 +168,7 @@ def resolve_base_url(request_base: str = None) -> str:
     return "https://ebedsouza-vocalyx.hf.space"
 
 
-def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: str = "outbound", base_url: str = None, voice_engine: Optional[str] = None, language: Optional[str] = None, voice_id: Optional[int] = None, reference_audio: Optional[str] = None, persona_name: Optional[str] = None) -> Dict[str, Any]:
+def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: str = "outbound", base_url: str = None, voice_engine: Optional[str] = None, language: Optional[str] = None, voice_id: Optional[int] = None, reference_audio: Optional[str] = None, persona_name: Optional[str] = None, script_id: Optional[int] = None, custom_context: Optional[str] = None) -> Dict[str, Any]:
     if not is_configured():
         raise RuntimeError("Twilio is not configured. Please enter your Account SID, Auth Token, and Phone Number in Settings.")
 
@@ -192,6 +192,8 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
         voice_url += f"&contact_id={contact_id}"
     if language:
         voice_url += f"&lang={language}"
+    if script_id:
+        voice_url += f"&script_id={script_id}"
 
     status_callback = f"{public_url}/api/twilio/status"
     if contact_id:
@@ -242,6 +244,8 @@ def make_outbound_call(to_number: str, contact_id: Optional[int] = None, mode: s
         "reference_audio": reference_audio,
         "persona_name": active_persona,
         "language": language or "en-US",
+        "script_id": script_id,
+        "custom_context": (custom_context or "").strip(),
     }
 
     # Pre-generate cloned voice greeting directly inside call initiation context

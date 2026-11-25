@@ -95,13 +95,15 @@ def get_chat_response(
         "Never say or imply that you are an AI, a robot, an assistant, or a language model. "
         "Speak in a natural, polite, composed, and formal business tone. "
         "Do not use exclamation marks, hyperactive enthusiasm, sales hype, or casual slang. "
-        f"Keep your response strictly 1 to 2 clear, helpful sentences (under 25 words) so it sounds like a real, poised human speaking over the phone.{lang_instruction}",
+        f"Keep your response to 1 to 2 clear, concise spoken sentences (under 35 words) so it sounds like a poised human speaking over the phone.{lang_instruction}",
     ]
 
-    # Active call script guidance
+    # Active call script & live caller status/context (highest operational priority)
     if script_content and script_content.strip():
         system_parts.append(
-            f"\nActive Call Script — follow this structure naturally during the conversation:\n{script_content.strip()}"
+            "\nMANDATORY CALL SCRIPT & CALLER CONTEXT — You MUST follow the context, caller's previous position/status, and script steps below on every turn. "
+            "Check the conversation history so you advance cleanly without repeating finished steps, and prioritize these instructions over generic defaults:\n"
+            f"{script_content.strip()}"
         )
 
     if rag_context:
@@ -163,6 +165,35 @@ def get_chat_response(
         messages=messages,
     )
     return completion.choices[0].message.content.strip()
+
+
+def generate_context_greeting(
+    persona_name: str = "Alex",
+    contact_name: str = "there",
+    script_content: str = "",
+    language: str = "en-US",
+    mode: str = "outbound",
+) -> Optional[str]:
+    """Generate a single concise opening greeting tailored to the script/caller status context."""
+    if not script_content or not script_content.strip():
+        return None
+    lang_name = _LANGUAGE_NAMES.get(language or "en-US", "English")
+    extra_lang = f" Respond strictly in {lang_name} using native script if Hindi/Kannada." if language not in ("en-US", "en-IN", "") else ""
+    prompt = (
+        f"You are {persona_name} starting a live {mode} phone call with {contact_name}. "
+        f"Write ONLY the very first opening line (1 short natural sentence, under 24 words) following the call script/context below.{extra_lang}\n\n"
+        f"Context/Script:\n{script_content.strip()}"
+    )
+    try:
+        completion = _get_client().chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "system", "content": prompt}],
+            timeout=5.0,
+        )
+        out = (completion.choices[0].message.content or "").strip().strip('"').strip("'")
+        return out if out else None
+    except Exception:
+        return None
 
 
 def analyze_call(transcript: str, contact_name: str = "Contact") -> dict:

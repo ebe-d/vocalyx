@@ -122,6 +122,7 @@ class ChatRequest(BaseModel):
     voice_id: Optional[int] = None
     conversation_history: Optional[List[dict]] = None
     script_id: Optional[int] = None
+    call_context: Optional[str] = None
     language: Optional[str] = "en-US"
 
 
@@ -152,6 +153,8 @@ class TwilioCallRequest(BaseModel):
     voice_engine: Optional[str] = None
     voice_id: Optional[int] = None
     language: Optional[str] = None
+    script_id: Optional[int] = None
+    call_context: Optional[str] = None
 
 
 class TwilioHangupRequest(BaseModel):
@@ -418,11 +421,16 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     from backend import llm_engine
 
-    script_content = None
+    context_parts = []
     if request.script_id:
         script = db.query(models.Script).filter(models.Script.id == request.script_id).first()
-        if script:
-            script_content = script.content
+        if script and script.content:
+            context_parts.append(f"[Call Script: {script.title}]\n{script.content.strip()}")
+    if request.call_context and request.call_context.strip():
+        ctx_txt = request.call_context.strip()
+        if not context_parts or ctx_txt not in context_parts[0]:
+            context_parts.append(f"[Caller Status & Live Context]\n{ctx_txt}")
+    script_content = "\n\n".join(context_parts) if context_parts else None
 
     target_lang = request.language or contact_memory.get("preferred_language") or "en-US"
 
@@ -623,6 +631,8 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
     req_contact_id = request.query_params.get("contact_id")
     req_contact_name = request.query_params.get("contact_name")
     req_mode = request.query_params.get("mode") or "outbound"
+    req_script_id = request.query_params.get("script_id")
+    req_call_context = ""
     try:
         body = await request.json()
         if isinstance(body, dict):
@@ -632,6 +642,8 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
             req_contact_id = req_contact_id or body.get("contact_id")
             req_contact_name = req_contact_name or body.get("contact_name")
             req_mode = body.get("mode") or req_mode
+            req_script_id = req_script_id or body.get("script_id")
+            req_call_context = (body.get("call_context") or "").strip()
     except Exception:
         pass
 
@@ -674,7 +686,33 @@ async def post_tts_prewarm(request: Request, db: Session = Depends(get_db)):
         selected_voice if req_lang not in ("kn-IN", "kn", "hi-IN", "hi") else None,
         active_engine,
     )
-    greeting_text = _build_greeting_text(
+    prewarm_ctx_parts = []
+    if req_script_id:
+        try:
+            s_obj = db.query(models.Script).filter(models.Script.id == int(req_script_id)).first()
+            if s_obj and s_obj.content:
+                prewarm_ctx_parts.append(s_obj.content.strip())
+        except Exception:
+            pass
+    if req_call_context:
+        if not prewarm_ctx_parts or req_call_context not in prewarm_ctx_parts[0]:
+            prewarm_ctx_parts.append(req_call_context)
+
+    custom_greeting = None
+    if prewarm_ctx_parts:
+        try:
+            from backend import llm_engine
+            custom_greeting = llm_engine.generate_context_greeting(
+                persona_name=persona_name,
+                contact_name=contact_name,
+                script_content="\n\n".join(prewarm_ctx_parts),
+                language=req_lang,
+                mode=req_mode,
+            )
+        except Exception:
+            custom_greeting = None
+
+    greeting_text = custom_greeting or _build_greeting_text(
         persona_name=persona_name,
         contact_name=contact_name,
         language=req_lang,
@@ -1476,6 +1514,20 @@ def initiate_phone_call(call_req: TwilioCallRequest, request: Request, db: Sessi
         eff_engine,
     )
 
+    combined_ctx_parts = []
+    if call_req.script_id:
+        try:
+            s_obj = db.query(models.Script).filter(models.Script.id == int(call_req.script_id)).first()
+            if s_obj and s_obj.content:
+                combined_ctx_parts.append(f"[Call Script: {s_obj.title}]\n{s_obj.content.strip()}")
+        except Exception:
+            pass
+    if call_req.call_context and call_req.call_context.strip():
+        ctx_clean = call_req.call_context.strip()
+        if not combined_ctx_parts or ctx_clean not in combined_ctx_parts[0]:
+            combined_ctx_parts.append(f"[Caller Status & Live Context]\n{ctx_clean}")
+    combined_call_context = "\n\n".join(combined_ctx_parts) if combined_ctx_parts else None
+
     try:
         res = twilio_service.make_outbound_call(
             to_number=call_req.to_number,
@@ -1487,6 +1539,8 @@ def initiate_phone_call(call_req: TwilioCallRequest, request: Request, db: Sessi
             voice_id=selected_voice.id if selected_voice else call_req.voice_id,
             reference_audio=ref_audio,
             persona_name=persona_name,
+            script_id=call_req.script_id,
+            custom_context=combined_call_context,
         )
         return res
     except Exception as exc:
@@ -1650,6 +1704,16 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
             call_engine,
         )
 
+        script_id_param = request.query_params.get("script_id") or existing_call.get("script_id")
+        call_custom_ctx = (existing_call.get("custom_context") or "").strip()
+        if not call_custom_ctx and script_id_param:
+            try:
+                s_obj = db.query(models.Script).filter(models.Script.id == int(script_id_param)).first()
+                if s_obj and s_obj.content:
+                    call_custom_ctx = f"[Call Script: {s_obj.title}]\n{s_obj.content.strip()}"
+            except Exception:
+                pass
+
         # Synchronized initial greeting using selected persona & language
         greeting = _build_greeting_text(
             persona_name=persona_name,
@@ -1674,6 +1738,8 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
                 "reference_audio": call_ref_audio,
                 "persona_name": persona_name,
                 "language": call_lang,
+                "script_id": int(script_id_param) if script_id_param else None,
+                "custom_context": call_custom_ctx,
             }
         else:
             twilio_service.active_calls[call_sid]["transcript"].append({"role": "agent", "text": greeting})
@@ -1682,6 +1748,10 @@ async def twilio_voice_webhook(request: Request, db: Session = Depends(get_db)):
             twilio_service.active_calls[call_sid]["reference_audio"] = call_ref_audio
             twilio_service.active_calls[call_sid]["persona_name"] = persona_name
             twilio_service.active_calls[call_sid]["language"] = call_lang
+            if call_custom_ctx:
+                twilio_service.active_calls[call_sid]["custom_context"] = call_custom_ctx
+            if script_id_param:
+                twilio_service.active_calls[call_sid]["script_id"] = int(script_id_param)
 
         twiml_xml = twilio_service.build_twiml(greeting, call_sid, base_url, is_greeting=True, voice_engine=call_engine, reference_audio=call_ref_audio)
         return Response(content=twiml_xml, media_type="application/xml")
@@ -1798,6 +1868,15 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
         call_ref_audio = call_state.get("reference_audio")
         call_persona = call_state.get("persona_name") or _get_voice_persona_name(None, call_engine)
 
+        call_script_content = (call_state.get("custom_context") or "").strip()
+        if not call_script_content and call_state.get("script_id"):
+            try:
+                s_obj = db.query(models.Script).filter(models.Script.id == int(call_state["script_id"])).first()
+                if s_obj and s_obj.content:
+                    call_script_content = f"[Call Script: {s_obj.title}]\n{s_obj.content.strip()}"
+            except Exception:
+                pass
+
         import asyncio
         t_req_start = time.monotonic()
         loop = asyncio.get_event_loop()
@@ -1814,6 +1893,7 @@ async def twilio_respond_webhook(request: Request, db: Session = Depends(get_db)
                 contact_memory=contact_memory,
                 conversation_history=transcript_snapshot,
                 previous_calls=previous_calls_data,
+                script_content=call_script_content or None,
                 language=call_lang,
                 agent_name=call_persona,
             )

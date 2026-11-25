@@ -240,6 +240,54 @@ def send_sms(text: str, to_phone: Optional[str] = None) -> Tuple[bool, str]:
         return False, f"Twilio SMS error: {exc}"
 
 
+def _ensure_whatsapp_template(client, clean_text_len: int = 900) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Find or auto-create a reusable Vocalyx Content Template (HX...) on the user's Twilio account
+    so Twilio WhatsApp alerts work even when Sandbox/Business requires ContentSid.
+    Returns (content_sid, status_note).
+    """
+    existing_sid = (_alerts_config.get("whatsapp", {}).get("content_sid") or "").strip()
+    if existing_sid:
+        return existing_sid, None
+
+    try:
+        contents = client.content.v1.contents.list(limit=25)
+        for rec in contents:
+            fname = (getattr(rec, "friendly_name", "") or "").lower()
+            types_dict = getattr(rec, "types", {}) or {}
+            if "vocalyx" in fname and isinstance(types_dict, dict):
+                _alerts_config["whatsapp"]["content_sid"] = rec.sid
+                _persist_config()
+                return rec.sid, None
+    except Exception as list_err:
+        print(f"[Alerts WhatsApp Content List Note]: {list_err}")
+
+    try:
+        template = client.content.v1.contents.create(
+            friendly_name="vocalyx_call_alert",
+            language="en",
+            types={
+                "twilio/text": {
+                    "body": "Vocalyx Alert: {{1}}",
+                }
+            },
+        )
+        sid = template.sid
+        try:
+            client.content.v1.contents(sid).approval_requests.create(
+                name="vocalyx_call_alert",
+                category="UTILITY",
+            )
+        except Exception as appr_err:
+            print(f"[Alerts WhatsApp Approval Note]: {appr_err}")
+        _alerts_config["whatsapp"]["content_sid"] = sid
+        _persist_config()
+        print(f"[Alerts WhatsApp] Auto-created Twilio Content Template SID: {sid}")
+        return sid, None
+    except Exception as create_err:
+        return None, str(create_err)
+
+
 def send_whatsapp(
     text: str,
     to_phone: Optional[str] = None,
@@ -285,6 +333,8 @@ def send_whatsapp(
             digits_from = "+" + digits_from
         clean_from = f"whatsapp:{digits_from}"
 
+        print(f"[Alerts WhatsApp] Sending from={clean_from} to={clean_to} (content_sid={resolved_content_sid or 'none'})")
+
         # First attempt free-form body (works whenever the 24-hour customer service window is open)
         try:
             message = client.messages.create(
@@ -299,26 +349,40 @@ def send_whatsapp(
                 k in err_lower
                 for k in ("contentsid", "content_sid", "63016", "21654", "24 hour", "24-hour", "freeform", "outside the allowed window")
             )
-            if needs_template and resolved_content_sid:
+            if not needs_template:
+                raise
+
+            auto_err = None
+            if not resolved_content_sid:
+                resolved_content_sid, auto_err = _ensure_whatsapp_template(client)
+
+            if resolved_content_sid:
                 compact_text = " | ".join(line.strip() for line in text.replace("*", "").splitlines() if line.strip())[:950]
                 vars_payload = dict(template_vars or {})
                 vars_payload.setdefault("1", compact_text)
                 vars_payload.setdefault("2", "Vocalyx Call Alert")
-                message = client.messages.create(
-                    from_=clean_from,
-                    to=clean_to,
-                    content_sid=resolved_content_sid,
-                    content_variables=json.dumps(vars_payload),
-                )
-                return True, f"WhatsApp template alert sent via ContentSid (SID: {message.sid})"
-            if needs_template:
-                return (
-                    False,
-                    f"Twilio WhatsApp requires an active 24h session or ContentSid: "
-                    f"send your Sandbox join code (or 'hi') to {clean_from} on WhatsApp to open the 24h window, "
-                    f"OR enter an approved Twilio Content Template SID (HX...) in Alerts. ({body_exc})",
-                )
-            raise
+                try:
+                    message = client.messages.create(
+                        from_=clean_from,
+                        to=clean_to,
+                        content_sid=resolved_content_sid,
+                        content_variables=json.dumps(vars_payload),
+                    )
+                    return True, f"WhatsApp alert sent via template {resolved_content_sid} (SID: {message.sid})"
+                except Exception as tpl_exc:
+                    return (
+                        False,
+                        f"Auto-template {resolved_content_sid} failed ({tpl_exc}). "
+                        f"Check Twilio Sandbox join status (send exact 2-word 'join ...' code from Twilio Console to {clean_from} so WhatsApp replies 'You are all set!') "
+                        f"or approve template {resolved_content_sid} in Twilio Content Template Builder.",
+                    )
+
+            return (
+                False,
+                f"Twilio blocked free-form WhatsApp ({body_exc}). "
+                f"Auto-template error: {auto_err or 'unavailable'}. "
+                f"Verify in Twilio Console that {clean_to} joined Sandbox {clean_from} and received 'You are all set!', or create a Content Template SID (HX...) in Twilio Console.",
+            )
     except Exception as exc:
         return False, f"Twilio WhatsApp error: {exc}"
 

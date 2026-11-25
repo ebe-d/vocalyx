@@ -194,7 +194,17 @@ def _standardize_and_save_audio(wav_raw, native_sr: int, output_path: str, targe
     else:
         save_sr = target_sr
 
-    wav_int16 = (np.clip(wav_np, -1.0, 1.0) * 32767.0).astype(np.int16)
+    # Apply a subtle 8ms fade-in on leading edge, then prepend 450ms + append 200ms digital silence
+    # so telephony <Play> jitter-buffer / browser audio wake-up never clips opening words on fast voices
+    if wav_np.size > 0:
+        ramp_len = min(wav_np.size, max(1, int(save_sr * 0.008)))
+        wav_np = wav_np.copy()
+        wav_np[:ramp_len] *= np.linspace(0.0, 1.0, ramp_len, dtype=wav_np.dtype)
+    lead_silence = np.zeros(int(save_sr * 0.45), dtype=np.float32)
+    tail_silence = np.zeros(int(save_sr * 0.20), dtype=np.float32)
+    wav_padded = np.concatenate([lead_silence, wav_np.astype(np.float32), tail_silence])
+
+    wav_int16 = (np.clip(wav_padded, -1.0, 1.0) * 32767.0).astype(np.int16)
     sf.write(output_path, wav_int16, save_sr, subtype='PCM_16')
     return output_path
 
