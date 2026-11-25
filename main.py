@@ -167,6 +167,7 @@ class TTSRequest(BaseModel):
 class AnalyzeRequest(BaseModel):
     contact_id: Optional[int] = 0
     transcript: str  # Full conversation as a string
+    script_id: Optional[int] = None
 
 
 class TwilioConfigUpdate(BaseModel):
@@ -1010,36 +1011,105 @@ def seed_default_voices_if_needed(db: Session):
 
 
 def seed_default_script_if_needed(db: Session):
-    """Seed one clean sample call script if the scripts table is empty."""
-    if db.query(models.Script).count() > 0:
-        return
-    sample_script = models.Script(
-        title="Vocalyx Appointment & Demo Scheduler",
-        content="""CALL OBJECTIVE: Book a 20-minute product demo for Vocalyx AI calling platform.
+    """Seed one clean sample call script if empty, and keep built-in sample free of hyphenated numbers."""
+    clean_sample_content = """CALL OBJECTIVE: Book a twenty minute product demo for the Vocalyx calling platform.
 
 STEP 1 — QUALIFY (after caller responds to greeting):
 Acknowledge the caller warmly. Ask if this is a convenient time for a quick chat.
 
 STEP 2 — QUALIFY ROLE:
 Ask: "Are you currently handling sales or support calls for your team?"
-If YES → move to Step 3.
-If NO → politely ask who the right person might be, and offer to call back.
+If YES -> move to Step 3.
+If NO -> politely ask who the right person might be, and offer to call back.
 
-STEP 3 — VALUE PITCH (keep under 2 sentences total):
-Mention that Vocalyx automates outbound calling with a cloned voice, handles scheduling, and logs every conversation automatically. Teams typically save 3 to 4 hours a day.
+STEP 3 — VALUE PITCH (keep under two sentences total):
+Mention that Vocalyx automates outbound calling with a cloned voice, handles scheduling, and logs every conversation automatically. Teams typically save three to four hours a day.
 
 STEP 4 — SCHEDULE DEMO:
-Ask: "Would a quick 20-minute demo this week work for you? We can do Tuesday or Wednesday afternoon."
+Ask: "Would a quick twenty minute demo this week work for you? We can do Tuesday or Wednesday afternoon."
 Confirm the date and time the caller suggests.
 
 STEP 5 — CLOSE:
 Confirm the booking, tell them you will send a calendar invite, and thank them warmly for their time.
 
-TONE: Professional, calm, concise. Never read these step labels aloud. Speak naturally as if you wrote every word yourself.""",
+TONE: Polite, calm, and concise. Never read these step labels aloud, and speak all numbers in plain words."""
+
+    existing_default = (
+        db.query(models.Script)
+        .filter(models.Script.title == "Vocalyx Appointment & Demo Scheduler")
+        .first()
+    )
+    if existing_default:
+        if "20-minute" in (existing_default.content or ""):
+            existing_default.content = clean_sample_content
+            db.commit()
+        return
+
+    if db.query(models.Script).count() > 0:
+        return
+    sample_script = models.Script(
+        title="Vocalyx Appointment & Demo Scheduler",
+        content=clean_sample_content,
     )
     db.add(sample_script)
     db.commit()
     print("[Startup] Seeded default sample script: 'Vocalyx Appointment & Demo Scheduler'")
+
+
+_SCRIPT_LOG_MARKER = "--- POST-CALL STATUS LOG (AUTO-UPDATED) ---"
+
+
+def _update_post_call_records(
+    db: Session,
+    contact: models.Contact,
+    analysis: dict,
+    script_id: Optional[int] = None,
+) -> Optional[dict]:
+    """
+    Update persistent contact memory AND append a rolling status update to the
+    active Call Script after each completed call (both Simulator and Twilio).
+    """
+    if contact is not None:
+        contact.last_topic = analysis.get("last_topic")
+        contact.interest_level = analysis.get("interest_level", "Unknown")
+        contact.concerns = analysis.get("concerns")
+        contact.commitments = analysis.get("commitments")
+        contact.last_contacted_at = datetime.utcnow()
+
+    updated_script = None
+    if script_id:
+        try:
+            s_obj = db.query(models.Script).filter(models.Script.id == int(script_id)).first()
+            if s_obj:
+                raw_content = s_obj.content or ""
+                if _SCRIPT_LOG_MARKER in raw_content:
+                    base_part, log_part = raw_content.split(_SCRIPT_LOG_MARKER, 1)
+                else:
+                    base_part, log_part = raw_content, ""
+                base_part = base_part.rstrip()
+                prev_entries = [ln.strip() for ln in log_part.splitlines() if ln.strip().startswith("•")]
+
+                stamp = datetime.utcnow().strftime("%b %d %H:%M UTC")
+                cname = contact.name if contact else "Caller"
+                outcome = analysis.get("outcome") or "Follow-up"
+                interest = analysis.get("interest_level") or "Unknown"
+                summary_txt = re.sub(r"\s+", " ", (analysis.get("summary") or "")).strip()[:180]
+                details = [f"Outcome: {outcome} ({interest})"]
+                if analysis.get("commitments"):
+                    details.append(f"Commitments: {analysis['commitments']}")
+                if analysis.get("concerns"):
+                    details.append(f"Concerns: {analysis['concerns']}")
+                if summary_txt:
+                    details.append(f"Summary: {summary_txt}")
+                new_entry = f"• [{stamp}] {cname} — " + " | ".join(details)
+
+                recent_entries = (prev_entries + [new_entry])[-3:]
+                s_obj.content = f"{base_part}\n\n{_SCRIPT_LOG_MARKER}\n" + "\n".join(recent_entries)
+                updated_script = {"id": s_obj.id, "title": s_obj.title, "content": s_obj.content}
+                print(f"[Script Auto-Update] Updated script #{s_obj.id} ('{s_obj.title}') after call with {cname}.")
+        except Exception as _su_err:
+            print(f"[Script Auto-Update Note]: {_su_err}")
+    return updated_script
 
 
 @app.get("/api/voices")
@@ -1244,12 +1314,8 @@ async def analyze_call(request: AnalyzeRequest, db: Session = Depends(get_db)):
     from backend import llm_engine
     analysis = llm_engine.analyze_call(transcript, contact.name)
 
-    # Update contact record with analysis results
-    contact.last_topic = analysis.get("last_topic")
-    contact.interest_level = analysis.get("interest_level", "Unknown")
-    contact.concerns = analysis.get("concerns")
-    contact.commitments = analysis.get("commitments")
-    contact.last_contacted_at = datetime.utcnow()
+    # Update contact memory & active script after call
+    updated_script = _update_post_call_records(db, contact, analysis, script_id=request.script_id)
 
     # Create Call record
     db_call = models.Call(
@@ -1288,6 +1354,7 @@ async def analyze_call(request: AnalyzeRequest, db: Session = Depends(get_db)):
     return {
         **analysis,
         "call_id": db_call.id,
+        "updated_script": updated_script,
         "telegram_sent": telegram_sent,
         "whatsapp_sent": whatsapp_sent,
         "sms_sent": sms_sent,
@@ -1572,6 +1639,7 @@ def test_alert_channel(req: AlertTestRequest):
             to_phone=req.to_phone,
             from_phone=req.from_phone,
             content_sid=req.content_sid,
+            force_template_test=True,
             template_vars={
                 "1": "Alex Smith (Test) — Score 92/100 (Positive, Interested): Test verification alert from Vocalyx Message Alerts console.",
                 "2": "Score 92/100 (Positive) — Interested",
@@ -1709,6 +1777,7 @@ def get_active_twilio_call(call_sid: Optional[str] = None, db: Session = Depends
                         cname = contact.name
                         try:
                             analysis = llm_engine.analyze_call(transcript_text, cname)
+                            _update_post_call_records(db, contact, analysis, script_id=call_data.get("script_id"))
                             db_call = models.Call(
                                 contact_id=cid,
                                 transcript=transcript_text,
@@ -2241,8 +2310,9 @@ async def twilio_status_webhook(request: Request, db: Session = Depends(get_db))
     if call_sid in twilio_service.active_calls:
         twilio_service.active_calls[call_sid]["status"] = call_status
 
-    if call_status == "completed" and call_sid in twilio_service.active_calls:
+    if call_status == "completed" and call_sid in twilio_service.active_calls and not twilio_service.active_calls[call_sid].get("analyzed"):
         call_info = twilio_service.active_calls[call_sid]
+        call_info["analyzed"] = True
         transcript_entries = call_info.get("transcript", [])
 
         if transcript_entries:
@@ -2269,6 +2339,7 @@ async def twilio_status_webhook(request: Request, db: Session = Depends(get_db))
             cname = contact.name
             try:
                 analysis = llm_engine.analyze_call(transcript_text, cname)
+                _update_post_call_records(db, contact, analysis, script_id=call_info.get("script_id"))
                 db_call = models.Call(
                     contact_id=cid,
                     transcript=transcript_text,

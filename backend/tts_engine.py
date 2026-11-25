@@ -297,7 +297,8 @@ def _synthesize_luxtts(text: str, reference_audio: str = None) -> str:
         prompt_to_pass = prompt_dict
 
     # Clean text: preserve expressiveness (! and ?) while removing markdown/URLs
-    clean_text = re.sub(r'[*_#`~\[\]()]', ' ', text)
+    clean_text = _expand_numbers_and_hyphens(text)
+    clean_text = re.sub(r'[*_#`~\[\]()]', ' ', clean_text)
     clean_text = re.sub(r'https?://\S+', '', clean_text)
     clean_text = re.sub(r'\.{2,}', '.', clean_text)
     clean_text = re.sub(r'!{2,}', '!', clean_text)
@@ -771,20 +772,120 @@ def _ensure_f5_ref_transcript(model, ref_audio: str) -> str:
     return txt
 
 
-def _normalize_for_f5tts(text: str) -> str:
-    """Normalize unicode whitespace and shorthand while preserving ?, !, and comma prosody."""
+_ONES = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+_ORDINALS = {
+    1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth",
+    7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth", 11: "eleventh", 12: "twelfth",
+    13: "thirteenth", 14: "fourteenth", 15: "fifteenth", 16: "sixteenth", 17: "seventeenth",
+    18: "eighteenth", 19: "nineteenth", 20: "twentieth", 21: "twenty first", 22: "twenty second",
+    23: "twenty third", 30: "thirtieth", 31: "thirty first",
+}
+
+
+def _int_to_words(n: int) -> str:
+    if n < 0 or n > 9999:
+        return str(n)
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        t, r = divmod(n, 10)
+        return _TENS[t] if r == 0 else f"{_TENS[t]} {_ONES[r]}"
+    if n < 1000:
+        h, r = divmod(n, 100)
+        return f"{_ONES[h]} hundred" if r == 0 else f"{_ONES[h]} hundred {_int_to_words(r)}"
+    th, r = divmod(n, 1000)
+    return f"{_ONES[th]} thousand" if r == 0 else f"{_ONES[th]} thousand {_int_to_words(r)}"
+
+
+def _expand_numbers_and_hyphens(text: str) -> str:
+    """
+    Convert hyphenated numbers ('2-minute', '20-minute', '3-4'), times ('11:30'),
+    ordinals ('12th'), currency ('$50'), and intra-word hyphens ('follow-up')
+    into natural spoken English words so neural TTS never stumbles on digits or '-'.
+    """
     t = text or ""
-    # Replace non-breaking / narrow spaces (e.g. '1\u202fp.m.') and curly quotes
-    t = t.replace("\u202f", " ").replace("\u00a0", " ").replace("\u200b", "")
+    # Skip full number expansion for phone numbers (>5 digits)
+    t = re.sub(r"\u202f|\u00a0", " ", t)
+    t = t.replace("\u200b", "")
+    # Currency e.g. $50 -> fifty dollars
+    t = re.sub(
+        r"\$(\d{1,4})(?!\.\d)",
+        lambda m: f"{_int_to_words(int(m.group(1)))} {'dollar' if int(m.group(1)) == 1 else 'dollars'}",
+        t,
+    )
+    # Time with minutes e.g. 11:30 a.m. -> eleven thirty A M, 2:00 -> two
+    t = re.sub(
+        r"\b(\d{1,2}):00\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])",
+        lambda m: f"{_int_to_words(int(m.group(1)))} A M",
+        t,
+    )
+    t = re.sub(
+        r"\b(\d{1,2}):00\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])",
+        lambda m: f"{_int_to_words(int(m.group(1)))} P M",
+        t,
+    )
+    t = re.sub(
+        r"\b(\d{1,2}):(\d{2})\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])",
+        lambda m: f"{_int_to_words(int(m.group(1)))} {_int_to_words(int(m.group(2)))} A M",
+        t,
+    )
+    t = re.sub(
+        r"\b(\d{1,2}):(\d{2})\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])",
+        lambda m: f"{_int_to_words(int(m.group(1)))} {_int_to_words(int(m.group(2)))} P M",
+        t,
+    )
+    t = re.sub(
+        r"\b(\d{1,2})\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])",
+        lambda m: f"{_int_to_words(int(m.group(1)))} A M",
+        t,
+    )
+    t = re.sub(
+        r"\b(\d{1,2})\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])",
+        lambda m: f"{_int_to_words(int(m.group(1)))} P M",
+        t,
+    )
+    # Hyphenated numeric ranges: 3-4 -> three to four
+    t = re.sub(
+        r"\b(\d{1,3})\s*-\s*(\d{1,3})\b",
+        lambda m: f"{_int_to_words(int(m.group(1)))} to {_int_to_words(int(m.group(2)))}",
+        t,
+    )
+    # Hyphenated number + word: 2-minute -> two minute, 20-minute -> twenty minute
+    t = re.sub(
+        r"\b(\d{1,3})-([A-Za-z]+)",
+        lambda m: f"{_int_to_words(int(m.group(1)))} {m.group(2)}",
+        t,
+    )
+    # Ordinals 1st..31st
+    def _ord_repl(m):
+        num = int(m.group(1))
+        if num in _ORDINALS:
+            return _ORDINALS[num]
+        w = _int_to_words(num)
+        return w + "th"
+    t = re.sub(r"\b([1-9]|[12]\d|3[01])(?:st|nd|rd|th)\b", _ord_repl, t, flags=re.IGNORECASE)
+    # Word-to-word hyphens: follow-up -> follow up
+    t = re.sub(r"([A-Za-z])-([A-Za-z])", r"\1 \2", t)
+    # Standalone small numbers 0..999 (avoid decimals like 3.5 or 5+ digit IDs/phones)
+    t = re.sub(
+        r"(?<![\d.+])\b(\d{1,3})\b(?![\d.])",
+        lambda m: _int_to_words(int(m.group(1))),
+        t,
+    )
+    return t
+
+
+def _normalize_for_f5tts(text: str) -> str:
+    """Normalize unicode whitespace, digits, and hyphens while preserving ?, !, and comma prosody."""
+    t = _expand_numbers_and_hyphens(text)
     t = t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
     t = t.replace("—", ", ").replace("–", ", ").replace(";", ",")
     t = re.sub(r"https?://\S+", "", t)
     t = re.sub(r"[*_#`~\[\]()]", " ", t)
-    # Expand common spoken time / symbol shorthand that neural TTS stumbles on
-    t = re.sub(r"\b(\d{1,2}):00\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 A M", t)
-    t = re.sub(r"\b(\d{1,2}):00\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 P M", t)
-    t = re.sub(r"\b(\d{1,2})\s*([Aa])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 A M", t)
-    t = re.sub(r"\b(\d{1,2})\s*([Pp])\.?[Mm]\.?(?=\s|$|[.,?!])", r"\1 P M", t)
     t = t.replace("%", " percent").replace("&", " and ")
     t = re.sub(r"!{2,}", "!", t)
     t = re.sub(r"\?{2,}", "?", t)
@@ -860,7 +961,14 @@ def _synthesize_edge_tts(text: str, voice_type: str = "female", voice_id_overrid
         fallback_wav = os.path.join(_BASE_DIR, "default_voices", "matthew_greeting.wav")
 
     clean_text = re.sub(r'[*_#`~\[\]()]', ' ', text)
-    clean_text = re.sub(r'https?://\S+', '', clean_text).strip()
+    clean_text = re.sub(r'https?://\S+', '', clean_text)
+    # Clean hyphenated numbers like '2-minute' -> 'two minute' so Indic & English neural voices don't stumble
+    clean_text = re.sub(
+        r"\b(\d{1,3})-([A-Za-z]+)",
+        lambda m: f"{_int_to_words(int(m.group(1)))} {m.group(2)}",
+        clean_text,
+    )
+    clean_text = clean_text.replace("\u202f", " ").replace("\u00a0", " ").strip()
     if not clean_text:
         clean_text = "Namaskara" if is_indic else "Hello, how can I assist you today?"
 
@@ -952,14 +1060,16 @@ def synthesize(
     is_kannada_script = any('\u0c80' <= ch <= '\u0cff' for ch in text)
     is_hindi_script = any('\u0900' <= ch <= '\u097f' for ch in text)
 
+    is_male_only = ("male" in engine_preference and "female" not in engine_preference)
+
     # Route Kannada (Sapna or Gagan)
     if is_kannada_script or any(k in engine_preference for k in ["kannada", "kn", "kn-in"]):
-        target_voice = "kn-IN-GaganNeural" if "male" in engine_preference else "kn-IN-SapnaNeural"
+        target_voice = "kn-IN-GaganNeural" if is_male_only else "kn-IN-SapnaNeural"
         return _synthesize_edge_tts(text, voice_id_override=target_voice)
 
     # Route Hindi (Swara or Madhur)
     if is_hindi_script or any(k in engine_preference for k in ["hindi", "hi", "hi-in"]):
-        target_voice = "hi-IN-MadhurNeural" if "male" in engine_preference else "hi-IN-SwaraNeural"
+        target_voice = "hi-IN-MadhurNeural" if is_male_only else "hi-IN-SwaraNeural"
         return _synthesize_edge_tts(text, voice_id_override=target_voice)
 
     # Generic edge-tts voice override (voice_id passed directly e.g. "edge:kn-IN-SapnaNeural")

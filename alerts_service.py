@@ -41,6 +41,9 @@ _alerts_config = {
 }
 
 
+_known_static_content_sids = set()
+
+
 def _load_persisted_config():
     global _alerts_config
     candidates = [
@@ -153,6 +156,8 @@ def update_config(data: Dict[str, Any]) -> Dict[str, Any]:
 
     if "whatsapp" in data and isinstance(data["whatsapp"], dict):
         _alerts_config["whatsapp"].update(data["whatsapp"])
+        if "content_sid" in data["whatsapp"]:
+            _known_static_content_sids.clear()
         if config:
             if "to_phone" in data["whatsapp"]:
                 config.WHATSAPP_TO_PHONE = data["whatsapp"]["to_phone"]
@@ -342,6 +347,7 @@ def send_whatsapp(
     from_phone: Optional[str] = None,
     content_sid: Optional[str] = None,
     template_vars: Optional[Dict[str, str]] = None,
+    force_template_test: bool = False,
 ) -> Tuple[bool, str]:
     """Send alert via Twilio WhatsApp API (free-form within 24h session, or ContentSid template)."""
     if not twilio_service or not twilio_service.is_configured():
@@ -405,6 +411,12 @@ def send_whatsapp(
                 resolved_content_sid, auto_err = _ensure_whatsapp_template(client, clean_from=clean_from)
 
             if resolved_content_sid:
+                if not force_template_test and resolved_content_sid in _known_static_content_sids:
+                    return (
+                        False,
+                        f"Skipped Content Template {resolved_content_sid} because it previously sent Twilio's fixed canned Trial message without call summary. "
+                        f"Telegram & SMS send full summaries on Trial; upgrade Twilio to send dynamic WhatsApp summaries.",
+                    )
                 compact_text = re.sub(r"\s+", " ", text.replace("*", "")).strip()[:900]
                 t_vars = template_vars or {}
                 v_summary = re.sub(r"\s+", " ", str(t_vars.get("1") or compact_text)).strip()
@@ -472,10 +484,18 @@ def send_whatsapp(
                                 is_static_boilerplate = True
                             elif any(
                                 phrase in rendered_body.lower()
-                                for phrase in ("welcome to twilio", "verification code", "your code is", "thanks for joining")
+                                for phrase in (
+                                    "welcome to twilio",
+                                    "verification code",
+                                    "your code is",
+                                    "thanks for joining",
+                                    "test message from twilio",
+                                    "reply c to confirm or r to reschedule",
+                                )
                             ) and (not v_body_short or v_body_short[:15].lower() not in rendered_body.lower()):
                                 is_static_boilerplate = True
                         if is_static_boilerplate:
+                            _known_static_content_sids.add(resolved_content_sid)
                             print(
                                 f"[Alerts WhatsApp WARNING] Template {resolved_content_sid} delivered static canned text "
                                 f"without call summary: {rendered_body!r}"

@@ -201,8 +201,8 @@ def get_chat_response(
         "Never say or imply that you are an AI, a robot, an assistant, or a language model. "
         "Speak normally and naturally like a real person on the phone—friendly and clear, never robotic, dramatic, or over-excited. "
         "Use standard punctuation cleanly: use '?' for genuine questions, '.' for normal statements, commas ',' for natural pauses, and at most an occasional '!' for a polite greeting. "
-        "Avoid semicolons, slashes, emojis, or exaggerated sales hype. "
-        "Write times, dates, and numbers in natural spoken words (for example say 'one in the afternoon' instead of '1 p.m.' and 'September eighth' instead of '8/9') so the voice synthesizer pronounces every word clearly. "
+        "Avoid semicolons, slashes, emojis, hyphenated numbers (never write '2-minute' or '20-minute'—write 'two minute' or 'twenty minute'), or exaggerated sales hype. "
+        "Write all times, dates, and numbers in plain spelled-out spoken words (for example 'one in the afternoon' instead of '1 p.m.' and 'twenty minutes' instead of '20-minute') so the voice synthesizer pronounces every word clearly. "
         f"Keep your response to 1 short, crisp spoken sentence (under 22 words whenever possible) so it sounds natural and responsive over the phone.{lang_instruction}",
     ]
 
@@ -277,11 +277,36 @@ def get_chat_response(
     if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != user_message:
         messages.append({"role": "user", "content": user_message})
 
-    completion = _get_client().chat.completions.create(
-        model=get_active_model(),
-        messages=messages,
-    )
-    return completion.choices[0].message.content.strip()
+    # Call Groq with automatic model fallback so tool_use_failed / <|channel|> quirks on non-English never 500
+    import re as _re_clean
+    candidate_models = []
+    for _m in (get_active_model(), "llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+        if _m and _m not in candidate_models:
+            candidate_models.append(_m)
+
+    last_err = None
+    for idx_m, model_name in enumerate(candidate_models):
+        try:
+            completion = _get_client().chat.completions.create(
+                model=model_name,
+                messages=messages,
+            )
+            raw_out = (completion.choices[0].message.content or "").strip()
+            raw_out = _re_clean.sub(r"<\|[^|>]+?\|>", "", raw_out).strip()
+            if raw_out:
+                return raw_out
+        except Exception as exc:
+            last_err = exc
+            err_str = str(exc)
+            print(f"[LLM get_chat_response Note] Model {model_name} failed: {err_str[:180]}")
+            # If this is the last fallback, rescue clean text from failed_generation if present
+            if idx_m == len(candidate_models) - 1:
+                m_fg = _re_clean.search(r'"arguments"\s*:\s*([^}]+)\}', err_str)
+                if m_fg:
+                    rescued = m_fg.group(1).strip().strip('"').strip("'").strip()
+                    if len(rescued) > 4:
+                        return rescued
+    raise last_err
 
 
 def _sanitize_greeting(text: str) -> Optional[str]:

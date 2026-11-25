@@ -870,6 +870,38 @@ const ui = {
     }
   },
 
+  async refreshAfterCall(source = 'sim') {
+    try {
+      await Promise.all([ui.loadDashboard(), ui.loadHistory(), ui.loadScripts()]);
+      if (typeof ui._renderContacts === 'function') ui._renderContacts();
+    } catch (e) {
+      console.warn('[RefreshAfterCall]', e);
+    }
+
+    // Refresh active context / script textareas so the very next call starts with updated memory & script log
+    const simCid = simulator.getActiveContactId();
+    const simSid = document.getElementById('sim-script-select')?.value || '';
+    const simCtx = document.getElementById('sim-call-context');
+    if (simCtx) {
+      simCtx.value = simCid ? ui.buildContactContextText(simCid) : '';
+      if (simSid) applyScriptIntoTextarea(simCtx, simSid);
+    }
+    const phoneCid = document.getElementById('phone-contact-select')?.value || '';
+    const phoneSid = document.getElementById('phone-script-select')?.value || '';
+    const phoneCtx = document.getElementById('phone-call-context');
+    if (phoneCtx) {
+      phoneCtx.value = phoneCid ? ui.buildContactContextText(phoneCid) : '';
+      if (phoneSid) applyScriptIntoTextarea(phoneCtx, phoneSid);
+    }
+
+    if (typeof simPrewarm !== 'undefined') {
+      simPrewarm.invalidate('Call finished — script & status updated. Click Re-Warm before next call.');
+    }
+    if (typeof voicePrewarmManager !== 'undefined') {
+      voicePrewarmManager.invalidate('Call finished — script & status updated. Click Re-Warm before dialing.');
+    }
+  },
+
   /* ── Settings ───────────────────────────────────────────────── */
   loadSettings() {
     const saved = localStorage.getItem(LS_KEY) || DEFAULT_BACKEND_URL;
@@ -1088,14 +1120,15 @@ const simulator = {
 
     try {
       const contactId = simulator.getActiveContactId() || 0;
+      const simScriptId = document.getElementById('sim-script-select')?.value || '';
       const result = await api.analyzeCall({
         contact_id: contactId,
         transcript: transcriptStr,
+        script_id: simScriptId ? parseInt(simScriptId, 10) : null,
       });
       simulator.showAnalysis(result);
-      toast.success('Call analysis complete!');
-      ui.loadDashboard();
-      ui.loadHistory();
+      toast.success(result?.updated_script ? 'Call analyzed & Script updated!' : 'Call analysis complete!');
+      await ui.refreshAfterCall('sim');
     } catch (e) {
       console.warn('[Simulator Analysis Warning]:', e);
       toast.error(`Analysis note: ${e.message}`);
@@ -2757,8 +2790,7 @@ const twilioManager = {
             if (call.analysis) {
               twilioManager.showPhoneAnalysis(call.analysis);
             }
-            ui.loadDashboard();
-            ui.loadHistory();
+            ui.refreshAfterCall('phone');
           }
         }
       } catch {}
